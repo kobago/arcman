@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#15171a"/>
+  <g transform="translate(8 9) scale(0.2)">
+    <path fill-rule="evenodd" fill="#e9eaec" d="M30 40H200V210H30Z M50 60V190H180V60Z"/>
+    <path fill-rule="evenodd" fill="#e9eaec" stroke="#15171a" stroke-width="14" paint-order="stroke" d="M50 210L104 10H128L182 210H149L139 170H93L83 210Z M99 140H133L116 74Z"/>
+    <path fill="#e6b450" stroke="#15171a" stroke-width="14" paint-order="stroke" d="M84 140H236L220 160L236 180H84Z"/>
+  </g>
+</svg>
