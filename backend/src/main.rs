@@ -1,4 +1,9 @@
-use std::{env, path::PathBuf, process::ExitCode};
+use std::{
+    env,
+    io::{BufRead, IsTerminal},
+    path::PathBuf,
+    process::ExitCode,
+};
 
 use arcman::{AppState, BoxResult, Config};
 
@@ -8,7 +13,7 @@ const USAGE: &str = "usage: arcman <command>
 
 commands:
   serve [--addr HOST:PORT]   start the server (default 127.0.0.1:3000)
-  set-password               set the login password
+  set-password               set the login password (reads one line from stdin when piped)
 
 environment:
   ARCMAN_HOME                 data directory (default ~/.arcman)
@@ -48,13 +53,23 @@ async fn serve(args: &[String]) -> BoxResult<()> {
     Ok(())
 }
 
-fn set_password() -> BoxResult<()> {
-    let password = rpassword::prompt_password("New password: ")?;
-    if password.chars().count() < 8 {
-        return Err("password must be at least 8 characters".into());
+fn read_password() -> BoxResult<String> {
+    if !std::io::stdin().is_terminal() {
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
     }
+    let password = rpassword::prompt_password("New password: ")?;
     if rpassword::prompt_password("Confirm password: ")? != password {
         return Err("passwords do not match".into());
+    }
+    Ok(password)
+}
+
+fn set_password() -> BoxResult<()> {
+    let password = read_password()?;
+    if password.chars().count() < 8 {
+        return Err("password must be at least 8 characters".into());
     }
     let config = config()?;
     std::fs::create_dir_all(&config.home)?;

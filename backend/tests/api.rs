@@ -1080,3 +1080,23 @@ async fn live_fxtwitter_photo_video_and_gif_posts_are_archived() {
         );
     }
 }
+
+#[tokio::test]
+async fn unknown_api_paths_answer_404_instead_of_the_app_page() {
+    let app = TestApp::start().await;
+    let (s, v) = app.call("GET", "/api/nope", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(v["error"], "not_found");
+}
+
+#[tokio::test]
+async fn video_tiles_and_details_carry_the_duration() {
+    let app = TestApp::start().await;
+    let mut status = app.with_video(app.status("180", "clip"), "video");
+    status["media"]["all"][0]["duration"] = json!(24.666);
+    app.upstream("180", status);
+    let id = app.save("https://x.com/a/status/180", None).await;
+    assert_eq!(app.tiles("").await["tiles"][0]["duration"], 24.666);
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["status"]["media"][0]["duration"], 24.666);
+}

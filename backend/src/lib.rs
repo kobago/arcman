@@ -14,7 +14,10 @@ use std::{
 };
 
 use axum::{
-    Router, middleware,
+    Router,
+    http::{StatusCode, Uri, header},
+    middleware,
+    response::{IntoResponse, Response},
     routing::{get, post, put},
 };
 use rusqlite::Connection;
@@ -108,7 +111,33 @@ pub fn app(state: AppState, queue: mpsc::UnboundedReceiver<i64>) -> Router {
     Router::new()
         .route("/api/login", post(auth::login))
         .merge(protected)
+        .fallback(spa)
         .with_state(state)
+}
+
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../frontend/dist/"]
+#[allow_missing = true]
+struct Spa;
+
+async fn spa(uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if path.starts_with("api/") || path.starts_with("media/") {
+        return error::ApiError::NotFound.into_response();
+    }
+    let (file, cache) = match Spa::get(path).filter(|_| !path.is_empty()) {
+        Some(f) if path.starts_with("assets/") => (f, "public, max-age=31536000, immutable"),
+        Some(f) => (f, "no-cache"),
+        None => match Spa::get("index.html") {
+            Some(f) => (f, "no-cache"),
+            None => return (StatusCode::NOT_FOUND, "frontend is not built").into_response(),
+        },
+    };
+    let headers = [
+        (header::CONTENT_TYPE, file.metadata.mimetype().to_string()),
+        (header::CACHE_CONTROL, cache.to_string()),
+    ];
+    (headers, file.data).into_response()
 }
 
 pub type BoxResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;

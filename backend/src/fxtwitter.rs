@@ -89,6 +89,7 @@ pub struct MediaItem {
     pub thumbnail_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub duration: Option<f64>,
     pub formats: Vec<Format>,
 }
 

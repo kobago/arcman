@@ -22,8 +22,8 @@
 | モジュール | 役割 |
 |---|---|
 | `main.rs` | CLI（`serve`、`set-password`） |
-| `lib.rs` | `Config`、`AppState`、ルーター |
-| `db.rs` | 接続とスキーマ |
+| `lib.rs` | `Config`、`AppState`、ルーター、SPA の配信 |
+| `db.rs` | 接続、スキーマ、マイグレーション（`PRAGMA user_version` で管理） |
 | `error.rs` | API エラー（HTTP ステータスとエラーコード） |
 | `auth.rs` | パスワード、セッション、ログイン失敗の制限、認証ミドルウェア |
 | `fxtwitter.rs` | URL から投稿IDを取り出す、API 呼び出し、レスポンスの型 |
@@ -43,7 +43,7 @@
 
 ```
 arcman serve [--addr HOST:PORT]   サーバーを起動する（例: Tailscale 越しなら --addr 0.0.0.0:3000）
-arcman set-password               パスワードを設定する（標準入力から2回）
+arcman set-password               パスワードを設定する（端末なら2回入力。パイプなら標準入力の1行）
 ```
 
 - 待ち受けアドレスは起動前に決まっている必要があり、Web の設定画面には置かない（変えた結果アクセスできなくなっても、画面から戻せないため）
@@ -77,6 +77,7 @@ arcman set-password               パスワードを設定する（標準入力�
 | DELETE | `/api/posts/{id}` | 削除する |
 | GET | `/api/authors` | 絞り込み用の投稿者の一覧 |
 | GET | `/media/{post_id}/{file}` | 保存したメディアファイル |
+| GET | それ以外 | SPA（`index.html` と `assets/`）。ログイン不要 |
 
 `/api/tiles` の絞り込み条件:
 
@@ -131,7 +132,7 @@ arcman set-password               パスワードを設定する（標準入力�
    - `200` ならスナップショットと取り出したカラムを保存し、取得中にしてワーカーに渡す
 3. ワーカーはスナップショットからダウンロード計画を作り、1件ずつ保存する
    - 画像は `url`（`?name=orig` 付き）
-   - 動画と GIF は `formats` の mp4 のうち最高ビットレートのもの。サムネイルも保存する
+   - 動画と GIF は `formats` の mp4 のうち最高ビットレートのもの。サムネイルと長さ（秒）も保存する
    - 投稿者アイコン、引用元のメディアとアイコン、リンクカードの画像
    - X記事は、`article` の中にある `pbs.twimg.com` の画像 URL をすべて保存する
 4. すべて保存できたら完了、1つでも失敗したら失敗にする。起動時に取得中の投稿をワーカーに渡し直す
@@ -141,3 +142,11 @@ arcman set-password               パスワードを設定する（標準入力�
 ## 5. 詳細のレスポンス
 
 スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
+
+## 6. SPA の配信
+
+- `frontend/dist` を rust-embed で実行ファイルに埋め込み、1つの実行ファイルで配信する
+- `/api/` と `/media/` 以外のパスで該当ファイルがなければ `index.html` を返す（クライアント側のルーティングのため）
+- `assets/` 以下はファイル名にハッシュが付くので `immutable` でキャッシュし、`index.html` は `no-cache` にする
+- `build.rs` で `frontend/dist` の変更を監視し、SPA を作り直したらバックエンドも再コンパイルされるようにする
+- `frontend/dist` がない状態でもビルドでき、そのときは画面の代わりに「frontend is not built」を返す

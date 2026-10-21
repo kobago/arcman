@@ -71,12 +71,57 @@ CREATE TABLE sessions (
 );
 ";
 
+const MIGRATIONS: &[&str] = &["ALTER TABLE media ADD COLUMN duration REAL;"];
+
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let mut version = conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? as usize;
     if version == 0 {
         conn.execute_batch(&format!("BEGIN; {SCHEMA} PRAGMA user_version = 1; COMMIT;"))?;
+        version = 1;
+    }
+    for (i, migration) in MIGRATIONS.iter().enumerate().skip(version - 1) {
+        conn.execute_batch(&format!(
+            "BEGIN; {migration} PRAGMA user_version = {}; COMMIT;",
+            i + 2
+        ))?;
     }
     Ok(conn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upgrades_a_version_1_database_without_losing_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("arcman.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!("{SCHEMA} PRAGMA user_version = 1;"))
+                .unwrap();
+            conn.execute("INSERT INTO categories (name) VALUES ('kept')", [])
+                .unwrap();
+        }
+        let conn = open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version as usize, MIGRATIONS.len() + 1);
+        conn.execute("UPDATE media SET duration = 1.5", []).unwrap();
+        let name: String = conn
+            .query_row("SELECT name FROM categories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "kept");
+    }
+
+    #[test]
+    fn reopening_an_up_to_date_database_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("arcman.db");
+        drop(open(&path).unwrap());
+        assert!(open(&path).is_ok());
+    }
 }

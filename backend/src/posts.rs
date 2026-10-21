@@ -208,6 +208,8 @@ pub struct Tile {
     #[serde(skip_serializing_if = "Option::is_none")]
     height: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     author_name: Option<String>,
@@ -360,7 +362,7 @@ pub async fn tiles(
     let mut media: HashMap<i64, Vec<MediaRow>> = HashMap::new();
     if !ids.is_empty() {
         let mut stmt = db.prepare(&format!(
-            "SELECT post_id, role, kind, file, thumbnail, width, height, remote_url FROM media
+            "SELECT post_id, role, kind, file, thumbnail, width, height, duration, remote_url FROM media
              WHERE role = 'main' AND post_id IN ({}) ORDER BY post_id, position",
             vec!["?"; ids.len()].join(",")
         ))?;
@@ -373,7 +375,8 @@ pub async fn tiles(
                 thumbnail: r.get(4)?,
                 width: r.get(5)?,
                 height: r.get(6)?,
-                remote_url: r.get(7)?,
+                duration: r.get(7)?,
+                remote_url: r.get(8)?,
             });
         }
     }
@@ -391,6 +394,7 @@ pub async fn tiles(
             thumbnail: None,
             width: None,
             height: None,
+            duration: None,
             text: None,
             author_name: None,
             author_screen_name: None,
@@ -421,6 +425,7 @@ pub async fn tiles(
                             thumbnail: m.thumbnail.as_deref().map(|t| media_url(row.id, t)),
                             width: m.width,
                             height: m.height,
+                            duration: m.duration,
                             ..base(&m.kind)
                         });
                     }
@@ -446,6 +451,8 @@ pub struct MediaView {
     thumbnail: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -532,6 +539,7 @@ struct MediaRow {
     thumbnail: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
+    duration: Option<f64>,
     remote_url: String,
 }
 
@@ -551,6 +559,7 @@ impl LocalMedia {
                 thumbnail: m.thumbnail.as_deref().map(|t| media_url(self.post_id, t)),
                 width: m.width,
                 height: m.height,
+                duration: m.duration,
             })
             .collect()
     }
@@ -663,7 +672,7 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
         .collect::<Result<_, _>>()?;
     let rows = db
         .prepare(
-            "SELECT role, kind, file, thumbnail, width, height, remote_url FROM media
+            "SELECT role, kind, file, thumbnail, width, height, duration, remote_url FROM media
              WHERE post_id = ?1 ORDER BY role, position",
         )?
         .query_map([id], |r| {
@@ -674,7 +683,8 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
                 thumbnail: r.get(3)?,
                 width: r.get(4)?,
                 height: r.get(5)?,
-                remote_url: r.get(6)?,
+                duration: r.get(6)?,
+                remote_url: r.get(7)?,
             })
         })?
         .collect::<Result<_, _>>()?;

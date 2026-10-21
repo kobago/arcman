@@ -18,6 +18,7 @@ pub struct Download {
     pub thumbnail_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub duration: Option<f64>,
 }
 
 impl Download {
@@ -30,6 +31,7 @@ impl Download {
             thumbnail_url: None,
             width: None,
             height: None,
+            duration: None,
         }
     }
 
@@ -98,6 +100,7 @@ fn media_downloads(role: &'static str, items: &[MediaItem]) -> Vec<Download> {
             thumbnail_url: m.thumbnail_url.clone().filter(|_| kind != "photo"),
             width: m.width,
             height: m.height,
+            duration: m.duration.filter(|d| *d > 0.0),
         })
         .collect()
 }
@@ -215,9 +218,9 @@ fn finish(state: &AppState, post_id: i64, result: Result<(), String>, downloads:
                 tx.execute("DELETE FROM media WHERE post_id = ?1", [post_id])?;
                 for d in downloads {
                     tx.execute(
-                        "INSERT INTO media (post_id, role, position, kind, file, thumbnail, width, height, remote_url)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                        params![post_id, d.role, d.position, d.kind, d.file_name(), d.thumbnail_name(), d.width, d.height, d.url],
+                        "INSERT INTO media (post_id, role, position, kind, file, thumbnail, width, height, duration, remote_url)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                        params![post_id, d.role, d.position, d.kind, d.file_name(), d.thumbnail_name(), d.width, d.height, d.duration, d.url],
                     )?;
                 }
                 tx.execute(
