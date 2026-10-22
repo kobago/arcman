@@ -1,0 +1,11 @@
+[Unit]
+Description=ARCMAN archive manager
+
+[Service]
+ExecStart=@BIN@ serve --addr @ADDR@
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
