@@ -72,6 +72,8 @@ export type SaveResult = {
   reason?: 'not_found' | 'private'
 }
 
+export type PostProgress = { post_id: number; state: 'pending' | 'done' | 'failed'; progress: number | null }
+
 export type Settings = { fxtwitter_base_url: { value: string; source: 'saved' | 'env' | 'default' } }
 
 export class ApiError extends Error {
@@ -115,6 +117,7 @@ export const api = {
   tiles: (query: URLSearchParams) => request<TilePage>('GET', `/api/tiles?${query}`),
   savePosts: (urls: string[], folderId: number | null) =>
     request<SaveResult[]>('POST', '/api/posts', { urls, folder_id: folderId }),
+  progress: (ids: number[]) => request<PostProgress[]>('GET', `/api/progress?ids=${ids.join(',')}`),
   post: (id: number) => request<PostDetail>('GET', `/api/posts/${id}`),
   movePost: (id: number, folderId: number | null) => request<void>('PATCH', `/api/posts/${id}`, { folder_id: folderId }),
   setPostTags: (id: number, names: string[]) => request<TagRef[]>('PUT', `/api/posts/${id}/tags`, { names }),

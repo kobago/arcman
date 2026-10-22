@@ -37,6 +37,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub archive_queue: mpsc::UnboundedSender<i64>,
     pub login_guard: Arc<Mutex<auth::LoginGuard>>,
+    pub progress: archive::ProgressMap,
 }
 
 impl AppState {
@@ -56,6 +57,7 @@ impl AppState {
                 .build()?,
             archive_queue: tx,
             login_guard: Default::default(),
+            progress: Default::default(),
         };
         Ok((state, rx))
     }
@@ -80,6 +82,7 @@ pub fn app(state: AppState, queue: mpsc::UnboundedReceiver<i64>) -> Router {
         )
         .route("/api/posts/{id}/tags", put(posts::set_tags))
         .route("/api/posts/{id}/retry", post(posts::retry))
+        .route("/api/progress", get(posts::progress))
         .route("/api/tiles", get(posts::tiles))
         .route("/api/authors", get(posts::authors))
         .route("/api/sidebar", get(organize::sidebar))

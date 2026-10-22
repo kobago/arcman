@@ -804,3 +804,45 @@ pub async fn authors(State(state): State<AppState>) -> ApiResult<Json<Vec<Author
         .collect::<Result<_, _>>()?;
     Ok(Json(authors))
 }
+
+#[derive(Deserialize)]
+pub struct ProgressQuery {
+    ids: String,
+}
+
+#[derive(Serialize)]
+pub struct PostProgress {
+    post_id: i64,
+    state: String,
+    /// 0 to 1 while archiving; `null` while waiting in the queue or once settled.
+    progress: Option<f64>,
+}
+
+pub async fn progress(
+    State(state): State<AppState>,
+    Query(query): Query<ProgressQuery>,
+) -> ApiResult<Json<Vec<PostProgress>>> {
+    let ids: Vec<i64> = query
+        .ids
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .take(100)
+        .collect();
+    let db = state.db();
+    let mut stmt = db.prepare("SELECT state FROM posts WHERE id = ?1")?;
+    let mut out = vec![];
+    for id in ids {
+        let Some(post_state) = stmt.query_row([id], |r| r.get::<_, String>(0)).optional()? else {
+            continue;
+        };
+        let progress = (post_state == "pending")
+            .then(|| state.progress.fraction(id))
+            .flatten();
+        out.push(PostProgress {
+            post_id: id,
+            state: post_state,
+            progress,
+        });
+    }
+    Ok(Json(out))
+}

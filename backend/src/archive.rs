@@ -1,4 +1,8 @@
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use rusqlite::{OptionalExtension, params};
 use serde_json::Value;
@@ -145,24 +149,82 @@ pub fn plan(status: &Status) -> Vec<Download> {
     out
 }
 
-async fn download(http: &reqwest::Client, url: &str, dest: &Path) -> Result<(), String> {
-    let mut res = http
+/// How far the worker is through one post: whole files done, plus bytes of the file in flight.
+#[derive(Default)]
+struct Progress {
+    files_done: u32,
+    files_total: u32,
+    received: u64,
+    size: Option<u64>,
+}
+
+impl Progress {
+    fn fraction(&self) -> f64 {
+        if self.files_total == 0 {
+            return 1.0;
+        }
+        let current = match self.size {
+            Some(size) if size > 0 => (self.received as f64 / size as f64).min(1.0),
+            _ => 0.0,
+        };
+        (self.files_done as f64 + current) / self.files_total as f64
+    }
+}
+
+/// Progress of the posts the worker is archiving right now, keyed by post id.
+#[derive(Clone, Default)]
+pub struct ProgressMap(Arc<Mutex<HashMap<i64, Progress>>>);
+
+impl ProgressMap {
+    fn update(&self, post_id: i64, f: impl FnOnce(&mut Progress)) {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        f(map.entry(post_id).or_default());
+    }
+
+    fn remove(&self, post_id: i64) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&post_id);
+    }
+
+    /// `None` while the post waits in the queue.
+    pub fn fraction(&self, post_id: i64) -> Option<f64> {
+        let map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(&post_id).map(Progress::fraction)
+    }
+}
+
+async fn download(state: &AppState, post_id: i64, url: &str, dest: &Path) -> Result<(), String> {
+    let mut res = state
+        .http
         .get(url)
         .send()
         .await
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("{url}: {e}"))?;
+    let size = res.content_length();
+    state
+        .progress
+        .update(post_id, |p| (p.received, p.size) = (0, size));
     let part = dest.with_extension("part");
     let mut file = tokio::fs::File::create(&part)
         .await
         .map_err(|e| e.to_string())?;
     while let Some(chunk) = res.chunk().await.map_err(|e| format!("{url}: {e}"))? {
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        state
+            .progress
+            .update(post_id, |p| p.received += chunk.len() as u64);
     }
     file.flush().await.map_err(|e| e.to_string())?;
     tokio::fs::rename(&part, dest)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.progress.update(post_id, |p| {
+        (p.files_done, p.received, p.size) = (p.files_done + 1, 0, None)
+    });
+    Ok(())
 }
 
 async fn archive_post(state: &AppState, post_id: i64) {
@@ -185,6 +247,13 @@ async fn archive_post(state: &AppState, post_id: i64) {
     let Some(downloads) = downloads else {
         return finish(state, post_id, Err("snapshot_missing".into()), &[]);
     };
+    let files_total = downloads
+        .iter()
+        .map(|d| 1 + d.thumbnail_url.is_some() as u32)
+        .sum();
+    state
+        .progress
+        .update(post_id, |p| p.files_total = files_total);
     let dir = state.media_dir.join(post_id.to_string());
     let mut result = tokio::fs::create_dir_all(&dir)
         .await
@@ -193,9 +262,9 @@ async fn archive_post(state: &AppState, post_id: i64) {
         if result.is_err() {
             break;
         }
-        result = download(&state.http, &d.url, &dir.join(d.file_name())).await;
+        result = download(state, post_id, &d.url, &dir.join(d.file_name())).await;
         if let (Ok(()), Some(thumb), Some(name)) = (&result, &d.thumbnail_url, d.thumbnail_name()) {
-            result = download(&state.http, thumb, &dir.join(name)).await;
+            result = download(state, post_id, thumb, &dir.join(name)).await;
         }
     }
     if let Err(e) = &result {
@@ -207,6 +276,7 @@ async fn archive_post(state: &AppState, post_id: i64) {
         result.map_err(|_| "media_download".into()),
         &downloads,
     );
+    state.progress.remove(post_id);
 }
 
 fn finish(state: &AppState, post_id: i64, result: Result<(), String>, downloads: &[Download]) {
@@ -300,6 +370,20 @@ mod tests {
         let video = &plan(&s)[1];
         assert_eq!(video.url, "https://video.twimg.com/hi.mp4");
         assert_eq!(video.thumbnail_name().as_deref(), Some("main-1-thumb.jpg"));
+    }
+
+    #[test]
+    fn progress_counts_finished_files_plus_the_part_of_the_one_in_flight() {
+        let p = Progress {
+            files_done: 1,
+            files_total: 4,
+            received: 50,
+            size: Some(100),
+        };
+        assert_eq!(p.fraction(), 0.375);
+        let unknown_size = Progress { size: None, ..p };
+        assert_eq!(unknown_size.fraction(), 0.25);
+        assert_eq!(Progress::default().fraction(), 1.0);
     }
 
     #[test]

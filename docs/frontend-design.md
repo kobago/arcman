@@ -37,6 +37,7 @@
 | `format.ts` | 時間や日時の表示、タグキーの正規化（サーバーと同じ規則）、スワイプ方向の判定 |
 | `components/Sidebar.tsx` | カテゴリとフォルダ。作成、名前の変更、削除、ドラッグでの並べ替え（HTML5 のドラッグ＆ドロップ） |
 | `components/SaveBox.tsx` | URL の保存。PC は上部の入力欄、スマホは「＋」で開くシート |
+| `components/SaveToasts.tsx` | 保存の結果を右下に通知する。保存とダウンロードの進捗バーを出し、すべて済んだら5秒で消す。エラーがあれば閉じるまで残す |
 | `components/Gallery.tsx` | タイルの一覧と無限スクロール |
 | `components/Detail.tsx` | 詳細画面。PC は右に投稿の内容、スマホは写真アプリ風の下からのシート |
 

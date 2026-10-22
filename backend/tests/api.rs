@@ -481,6 +481,22 @@ async fn an_unreachable_api_leaves_a_failed_post_that_can_be_retried() {
 }
 
 #[tokio::test]
+async fn progress_reports_the_state_of_each_known_post() {
+    let app = TestApp::start().await;
+    app.upstream("110", app.with_photos(app.status("110", "one"), 1));
+    let id = app.save("https://x.com/a/status/110", None).await;
+
+    let (s, v) = app
+        .call("GET", &format!("/api/progress?ids={id},999"), None)
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v,
+        json!([{ "post_id": id, "state": "done", "progress": null }])
+    );
+}
+
+#[tokio::test]
 async fn a_failed_media_download_fails_the_post_until_retried() {
     let app = TestApp::start().await;
     app.upstream("109", app.with_photos(app.status("109", "flaky"), 1));

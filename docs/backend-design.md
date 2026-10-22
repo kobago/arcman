@@ -75,6 +75,7 @@ arcman set-password               パスワードを設定する（端末なら2
 | PUT | `/api/posts/{id}/tags` | `{names}`。タグの集合を置き換える。ないタグは作る |
 | POST | `/api/posts/{id}/retry` | 失敗した投稿を再試行する |
 | DELETE | `/api/posts/{id}` | 削除する |
+| GET | `/api/progress` | `ids`（カンマ区切り）の投稿の状態と、取得中なら進み具合（0〜1。キュー待ちは `null`）。ない投稿は返さない |
 | GET | `/api/authors` | 絞り込み用の投稿者の一覧 |
 | GET | `/media/{post_id}/{file}` | 保存したメディアファイル |
 | GET | それ以外 | SPA（`index.html` と `assets/`）。ログイン不要 |

@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router'
 import { ApiError } from './api'
 import App from './App'
+import { SaveToastProvider } from './components/SaveToasts'
 import { I18nProvider } from './I18nProvider'
 import { applyTheme, readTheme } from './theme'
 import './index.css'
@@ -32,7 +33,9 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <BrowserRouter>
-          <App />
+          <SaveToastProvider>
+            <App />
+          </SaveToastProvider>
         </BrowserRouter>
       </I18nProvider>
     </QueryClientProvider>

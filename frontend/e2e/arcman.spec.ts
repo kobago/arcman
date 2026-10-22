@@ -41,15 +41,20 @@ test('saving several URLs reports each line and shows one tile per image', async
   await login(page)
   await save(page, 'https://x.com/alice/status/1001', 'https://example.com/not-a-post')
 
-  const status = page.getByRole('status')
-  await expect(status).toContainText('1件を保存しました')
-  await expect(status).toContainText('x.com の投稿URLではありません')
+  const toast = page.getByRole('status')
+  await expect(toast).toContainText('1件を保存しました')
+  await expect(toast).toContainText('x.com の投稿URLではありません')
+  await expect(toast.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
 
   await expect(page.getByRole('link', { name: '投稿を開く (1/2)' }).first()).toBeVisible()
   await expect(page.getByRole('link', { name: '投稿を開く (2/2)' }).first()).toBeVisible()
 
+  // A toast with an error stays until closed; one that went through closes itself.
+  await toast.getByRole('button', { name: '閉じる' }).click()
+  await expect(toast).toBeHidden()
   await save(page, 'https://fixupx.com/alice/status/1001')
-  await expect(status).toContainText('すでに保存されています')
+  await expect(toast).toContainText('すでに保存されています')
+  await expect(toast).toBeHidden({ timeout: 8000 })
 })
 
 test('the detail view steps through images by key, keeps a URL per image, and closes with Escape', async ({ page }) => {
