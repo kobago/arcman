@@ -1460,6 +1460,9 @@ hr {
   .mobile-only {
     display: revert;
   }
+  .icon-btn.mobile-only {
+    display: inline-grid;
+  }
   .desktop-only {
     display: none !important;
   }
