@@ -25,6 +25,13 @@ function Media({ media }: { media: MediaView }) {
   return <video ref={ref} key={media.src} className="stage-media" src={media.src} poster={media.thumbnail} controls playsInline />
 }
 
+function TilePreview({ tile }: { tile: Tile }) {
+  if (tile.kind === 'photo') return <img className="stage-media" src={tile.src} alt="" draggable={false} />
+  if (tile.kind === 'video' || tile.kind === 'gif') return <img className="stage-media" src={tile.thumbnail} alt="" draggable={false} />
+  if (tile.kind === 'text') return <div className="stage-text">{tile.text}</div>
+  return null
+}
+
 function Status({ status, nested }: { status: StatusView; nested?: boolean }) {
   const { t, lang } = useI18n()
   const locale = lang === 'ja' ? 'ja-JP' : 'en-US'
@@ -228,6 +235,9 @@ const SHEET_OPEN_TOP = 210
 const SHEET_HANDLE = 28
 const SHEET_SNAP = 40
 
+// Space between neighbouring images while they slide; matches .slide in index.css.
+const SLIDE_GAP = 16
+
 function isTap(dx: number, dy: number) {
   return Math.abs(dx) < 10 && Math.abs(dy) < 10
 }
@@ -252,6 +262,11 @@ export function Detail() {
   const panel = useRef<HTMLElement>(null)
   const drag = useRef<{ y: number; top: number; moved: boolean } | null>(null)
   const [dragTop, setDragTop] = useState<number | null>(null)
+  const stage = useRef<HTMLElement>(null)
+  const axis = useRef<'x' | 'y' | null>(null)
+  const pending = useRef<Tile | null>(null)
+  const [offset, setOffset] = useState(0)
+  const [animating, setAnimating] = useState(false)
 
   const { data: post, error } = useQuery({
     queryKey: ['post', postId],
@@ -274,9 +289,45 @@ export function Detail() {
     [navigate, search],
   )
 
+  // Slides the track by one stage width, then swaps in the neighbour once the transition ends.
+  const slide = useCallback(
+    (tile: Tile | null, dir: 1 | -1) => {
+      if (!tile || pending.current) return
+      const width = stage.current?.clientWidth ?? 0
+      if (!width || matchMedia('(prefers-reduced-motion: reduce)').matches) return go(tile)
+      pending.current = tile
+      setAnimating(true)
+      setOffset(-dir * (width + SLIDE_GAP))
+    },
+    [go],
+  )
+  const settle = () => {
+    const tile = pending.current
+    if (tile) go(tile)
+    else setAnimating(false)
+  }
+
+  // A new tile starts centred and still; the neighbour it slid in from was showing the same picture there.
+  const shown = `${postId}/${index}`
+  const [lastShown, setLastShown] = useState(shown)
+  if (lastShown !== shown) {
+    setLastShown(shown)
+    setAnimating(false)
+    setOffset(0)
+  }
+  useEffect(() => {
+    pending.current = null
+  }, [shown])
+
   useEffect(() => {
     if (position >= tiles.length - 3 && hasMore) loadMore()
   }, [position, tiles.length, hasMore, loadMore])
+
+  useEffect(() => {
+    for (const tile of [prev, next]) {
+      if (tile) qc.prefetchQuery({ queryKey: ['post', tile.post_id], queryFn: () => api.post(tile.post_id) })
+    }
+  }, [prev, next, qc])
 
   useEffect(() => {
     root.current?.focus()
@@ -290,8 +341,8 @@ export function Detail() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isEditable(e.target) || document.querySelector('dialog[open]')) return
-      if (e.key === 'ArrowLeft') go(prev)
-      if (e.key === 'ArrowRight') go(next)
+      if (e.key === 'ArrowLeft') slide(prev, -1)
+      if (e.key === 'ArrowRight') slide(next, 1)
       if (e.key === 'Escape') {
         if (sheetOpen) setSheetOpen(false)
         else close()
@@ -299,16 +350,31 @@ export function Detail() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [prev, next, go, close, sheetOpen])
+  }, [prev, next, slide, close, sheetOpen])
 
   const media = post?.status?.media ?? []
   const current = media[index]
+  // A horizontal drag moves the track with the finger; vertical ones keep the swipe gestures.
   const swipe = {
     onPointerDown: (e: PointerEvent) => {
+      if (pending.current) return
       start.current = { x: e.clientX, y: e.clientY }
+      axis.current = null
+    },
+    onPointerMove: (e: PointerEvent<HTMLElement>) => {
+      if (!start.current) return
+      const dx = e.clientX - start.current.x
+      const dy = e.clientY - start.current.y
+      if (!axis.current) {
+        if (isTap(dx, dy)) return
+        axis.current = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+        if (axis.current === 'x') e.currentTarget.setPointerCapture(e.pointerId)
+      }
+      if (axis.current === 'x') setOffset((dx < 0 ? next : prev) ? dx : dx / 3)
     },
     onPointerCancel: () => {
       start.current = null
+      if (axis.current === 'x') settleBack()
     },
     onPointerUp: (e: PointerEvent) => {
       if (!start.current) return
@@ -316,12 +382,18 @@ export function Detail() {
       const dy = e.clientY - start.current.y
       const dir = swipeDirection(dx, dy)
       start.current = null
+      if (axis.current === 'x') {
+        const width = stage.current?.clientWidth ?? 0
+        const far = Math.abs(dx) > Math.min(80, width / 5)
+        if (far && dx < 0 && next) slide(next, 1)
+        else if (far && dx > 0 && prev) slide(prev, -1)
+        else settleBack()
+        return
+      }
       if (isTap(dx, dy) && !(e.target as Element).closest('button, a, video')) {
         if (sheetOpen) setSheetOpen(false)
         else setImmersive((on) => !on)
       }
-      if (dir === 'left') go(next)
-      if (dir === 'right') go(prev)
       if (dir === 'up') {
         setSheetOpen(true)
         setImmersive(false)
@@ -331,6 +403,11 @@ export function Detail() {
         else close()
       }
     },
+  }
+
+  function settleBack() {
+    setAnimating(true)
+    setOffset(0)
   }
 
   // The sheet follows the finger while its handle is dragged, then settles open or closed.
@@ -377,7 +454,7 @@ export function Detail() {
       aria-modal="true"
       aria-label={t('detail.content')}
     >
-      <section className="stage" aria-label={t('detail.media')} {...swipe}>
+      <section ref={stage} className="stage" aria-label={t('detail.media')} {...swipe}>
         <div className="stage-top">
           <button type="button" className="stage-btn" aria-label={t('common.close')} onClick={close}>
             <Icon name="close" size={20} strokeWidth={2} />
@@ -399,32 +476,50 @@ export function Detail() {
           )}
         </div>
         {prev && (
-          <button type="button" className="stage-nav prev" aria-label={t('detail.prev')} onClick={() => go(prev)}>
+          <button type="button" className="stage-nav prev" aria-label={t('detail.prev')} onClick={() => slide(prev, -1)}>
             <Icon name="chevronLeft" size={22} strokeWidth={2} />
           </button>
         )}
-        {error ? (
-          <p className="stage-message">{errorMessage(t, error)}</p>
-        ) : !post ? (
-          <span className="spinner" aria-label={t('common.loading')} />
-        ) : post.state !== 'done' ? (
-          <div className="stage-message">
-            <p>{t(post.state === 'pending' ? 'detail.pending' : 'detail.failed')}</p>
-            {post.failure && <p className="muted small">{t(`failure.${post.failure}` as 'failure.api_unavailable')}</p>}
-            {post.state === 'failed' && (
-              <button type="button" className="btn" disabled={retry.isPending} onClick={() => retry.mutate()}>
-                <Icon name="retry" size={14} strokeWidth={2} /> {t('common.retry')}
-              </button>
+        <div
+          className={animating ? 'stage-track animating' : 'stage-track'}
+          style={{ transform: `translateX(${offset}px)` }}
+          onTransitionEnd={(e) => e.target === e.currentTarget && settle()}
+        >
+          {prev && (
+            <div className="slide prev" aria-hidden="true">
+              <TilePreview tile={prev} />
+            </div>
+          )}
+          <div className="slide">
+            {error ? (
+              <p className="stage-message">{errorMessage(t, error)}</p>
+            ) : !post ? (
+              tiles[position] ? <TilePreview tile={tiles[position]} /> : <span className="spinner" aria-label={t('common.loading')} />
+            ) : post.state !== 'done' ? (
+              <div className="stage-message">
+                <p>{t(post.state === 'pending' ? 'detail.pending' : 'detail.failed')}</p>
+                {post.failure && <p className="muted small">{t(`failure.${post.failure}` as 'failure.api_unavailable')}</p>}
+                {post.state === 'failed' && (
+                  <button type="button" className="btn" disabled={retry.isPending} onClick={() => retry.mutate()}>
+                    <Icon name="retry" size={14} strokeWidth={2} /> {t('common.retry')}
+                  </button>
+                )}
+                {retry.error && <p className="form-error">{errorMessage(t, retry.error)}</p>}
+              </div>
+            ) : current ? (
+              <Media media={current} />
+            ) : (
+              <div className="stage-text">{post.status?.text}</div>
             )}
-            {retry.error && <p className="form-error">{errorMessage(t, retry.error)}</p>}
           </div>
-        ) : current ? (
-          <Media media={current} />
-        ) : (
-          <div className="stage-text">{post.status?.text}</div>
-        )}
+          {next && (
+            <div className="slide next" aria-hidden="true">
+              <TilePreview tile={next} />
+            </div>
+          )}
+        </div>
         {next && (
-          <button type="button" className="stage-nav next" aria-label={t('detail.next')} onClick={() => go(next)}>
+          <button type="button" className="stage-nav next" aria-label={t('detail.next')} onClick={() => slide(next, 1)}>
             <Icon name="chevronRight" size={22} strokeWidth={2} />
           </button>
         )}

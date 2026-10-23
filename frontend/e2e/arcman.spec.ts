@@ -189,6 +189,10 @@ test.describe('on a phone', () => {
     await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.4)
     await page.mouse.down()
     await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.4, { steps: 5 })
+    // The images follow the finger before it lets go.
+    const track = stage.locator('.stage-track')
+    expect(await track.evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m41)).toBeCloseTo(-box.width * 0.6, 0)
+    await expect(track.locator('.slide.next img')).toBeVisible()
     await page.mouse.up()
     await expect(page.getByTestId('counter')).toHaveText('2 / 2')
 
