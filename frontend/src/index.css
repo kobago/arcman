@@ -997,10 +997,11 @@ hr {
   place-items: center;
   border: 0;
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.45);
   color: #e9eaec;
   cursor: pointer;
   text-decoration: none;
+  backdrop-filter: blur(8px);
 }
 .stage-btn.pill {
   width: auto;
@@ -1010,7 +1011,10 @@ hr {
   font-size: 13px;
 }
 .counter {
-  color: #a3a9b0;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #d4d7db;
   font-size: 13px;
 }
 .stage-nav {
@@ -1024,9 +1028,10 @@ hr {
   place-items: center;
   border: 0;
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.45);
   color: #e9eaec;
   cursor: pointer;
+  backdrop-filter: blur(8px);
 }
 .stage-nav.prev {
   left: 16px;
@@ -1035,8 +1040,8 @@ hr {
   right: 16px;
 }
 .stage-media {
-  width: calc(100% - 160px);
-  height: calc(100% - 140px);
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   -webkit-user-drag: none;
 }
@@ -1652,16 +1657,19 @@ hr {
     left: 6px;
     right: 6px;
   }
-  .stage-btn {
-    background: none;
-  }
-  .pill-label,
-  .stage-nav {
+  .pill-label {
     display: none;
   }
-  .stage-media {
-    width: 100%;
-    height: 100%;
+  .stage-nav {
+    width: 40px;
+    height: 40px;
+    margin-top: -20px;
+  }
+  .stage-nav.prev {
+    left: 6px;
+  }
+  .stage-nav.next {
+    right: 6px;
   }
   .panel {
     position: absolute;

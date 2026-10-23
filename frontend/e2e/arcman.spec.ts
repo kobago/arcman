@@ -171,7 +171,7 @@ test('tags are added in the detail panel, filter the gallery, and can be renamed
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
-  test('the drawer switches folders and a swipe moves to the next image', async ({ page }) => {
+  test('the drawer switches folders, and a swipe or the arrows step through images', async ({ page }) => {
     await login(page)
     const id = await savedPostId(page, '1007')
 
@@ -191,5 +191,8 @@ test.describe('on a phone', () => {
     await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.4, { steps: 5 })
     await page.mouse.up()
     await expect(page.getByTestId('counter')).toHaveText('2 / 2')
+
+    await page.getByRole('button', { name: '前へ' }).tap()
+    await expect(page.getByTestId('counter')).toHaveText('1 / 2')
   })
 })

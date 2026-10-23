@@ -40,7 +40,7 @@
 | `components/SaveBox.tsx` | URL の保存。PC は上部の入力欄、スマホは「＋」で開くシート |
 | `components/SaveToasts.tsx` | 保存の結果を右下に通知する。保存とダウンロードの進捗バーを出し、すべて済んだら5秒で消す。エラーがあれば閉じるまで残す |
 | `components/Gallery.tsx` | タイルの一覧と無限スクロール |
-| `components/Detail.tsx` | 詳細画面。PC は右に投稿の内容、スマホは写真アプリ風の下からのシート |
+| `components/Detail.tsx` | 詳細画面。画像は余白なしで表示し、閉じる・保存・前後の矢印は画像に重ねる。PC は右に投稿の内容、スマホは写真アプリ風の下からのシート |
 
 ## 4. 振る舞い
 
