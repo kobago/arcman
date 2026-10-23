@@ -39,7 +39,7 @@ const ja = {
   'nav.deleteFolder.confirm': '{count}件と一緒に削除',
 
   'save.label': '保存するURL',
-  'save.placeholder': 'x.com の投稿や YouTube の動画のURLを貼り付け（改行で複数）',
+  'save.placeholder': 'URLを貼り付け（改行で複数）',
   'save.open': 'URLを保存',
   'save.destination': '保存先',
   'save.currentFolder': '（今開いているフォルダ）',
@@ -52,7 +52,7 @@ const ja = {
   'save.downloaded': '保存しました',
   'save.duplicate': 'すでに保存されています',
   'save.duplicateIn': 'すでに保存されています（「{folder}」にあります）',
-  'save.invalid_url': 'x.com の投稿や YouTube の動画のURLではありません',
+  'save.invalid_url': 'URLの形式が正しくありません',
   'save.unavailable': '削除されたか非公開のため、保存できません',
   'save.openPost': '開く',
 
@@ -71,6 +71,7 @@ const ja = {
   'filter.media.photo': '画像',
   'filter.media.video': '動画',
   'filter.media.youtube': 'YouTube',
+  'filter.media.web': 'Webページ',
   'filter.media.text': 'テキストのみ',
   'filter.media.any': 'すべて',
   'filter.author.any': 'すべての投稿者',
@@ -82,13 +83,14 @@ const ja = {
   'zoom.in': 'タイルを大きく',
   'zoom.out': 'タイルを小さく',
 
-  'gallery.empty': 'まだ投稿がありません。x.com の投稿や YouTube の動画のURLを貼り付けて保存してください。',
+  'gallery.empty': 'まだ何も保存していません。x.com の投稿や YouTube の動画、Webページの URL を貼り付けて保存してください。',
   'gallery.noMatch': '条件に合う投稿がありません。',
   'tile.pending': '取得中',
   'tile.failed': '取得できませんでした',
   'tile.open': '投稿を開く',
 
   'failure.api_unavailable': 'APIに接続できません',
+  'failure.page_unavailable': 'ページを取得できませんでした',
   'failure.media_download': 'メディアを保存できませんでした',
   'failure.snapshot_missing': '投稿の内容がありません',
 
@@ -99,6 +101,7 @@ const ja = {
   'detail.download': 'ファイルを保存',
   'detail.openOnX': 'x.com で開く',
   'detail.openOnYoutube': 'YouTube で開く',
+  'detail.openPage': 'ページを開く',
   'detail.translation': '日本語訳',
   'detail.quoteUnavailable': '引用元は表示できません',
   'detail.replies': '返信',
@@ -173,6 +176,7 @@ const ja = {
   'error.invalid_tag': 'タグ名を入力してください',
   'error.unknown_folder': 'フォルダが見つかりません',
   'error.api_unavailable': 'APIに接続できません。時間をおいて再試行してください',
+  'error.page_unavailable': 'ページを取得できませんでした。時間をおいて再試行してください',
   'error.unavailable': '削除されたか非公開のため、取得できません',
   'error.generic': 'うまくいきませんでした。もう一度試してください',
 }
@@ -218,7 +222,7 @@ const en: Record<Key, string> = {
   'nav.deleteFolder.confirm': 'Delete with {count} posts',
 
   'save.label': 'URLs to save',
-  'save.placeholder': 'Paste x.com post or YouTube video URLs (one per line)',
+  'save.placeholder': 'Paste URLs (one per line)',
   'save.open': 'Save URLs',
   'save.destination': 'Save to',
   'save.currentFolder': '(the open folder)',
@@ -231,7 +235,7 @@ const en: Record<Key, string> = {
   'save.downloaded': 'Saved',
   'save.duplicate': 'Already saved',
   'save.duplicateIn': 'Already saved (in “{folder}”)',
-  'save.invalid_url': 'Not an x.com post or YouTube video URL',
+  'save.invalid_url': 'Not a valid URL',
   'save.unavailable': 'Deleted or private, so it cannot be saved',
   'save.openPost': 'Open',
 
@@ -250,6 +254,7 @@ const en: Record<Key, string> = {
   'filter.media.photo': 'Images',
   'filter.media.video': 'Videos',
   'filter.media.youtube': 'YouTube',
+  'filter.media.web': 'Web pages',
   'filter.media.text': 'Text only',
   'filter.media.any': 'All',
   'filter.author.any': 'All authors',
@@ -261,13 +266,14 @@ const en: Record<Key, string> = {
   'zoom.in': 'Larger tiles',
   'zoom.out': 'Smaller tiles',
 
-  'gallery.empty': 'Nothing saved yet. Paste an x.com post or YouTube video URL to save it.',
+  'gallery.empty': 'Nothing saved yet. Paste the URL of an x.com post, a YouTube video or any web page to save it.',
   'gallery.noMatch': 'No posts match these filters.',
   'tile.pending': 'Fetching',
   'tile.failed': 'Could not fetch',
   'tile.open': 'Open post',
 
   'failure.api_unavailable': 'Cannot reach the API',
+  'failure.page_unavailable': 'Could not fetch the page',
   'failure.media_download': 'Could not save the media',
   'failure.snapshot_missing': 'The post content is missing',
 
@@ -278,6 +284,7 @@ const en: Record<Key, string> = {
   'detail.download': 'Download file',
   'detail.openOnX': 'Open on x.com',
   'detail.openOnYoutube': 'Open on YouTube',
+  'detail.openPage': 'Open page',
   'detail.translation': 'Japanese translation',
   'detail.quoteUnavailable': 'The quoted post is unavailable',
   'detail.replies': 'Replies',
@@ -352,6 +359,7 @@ const en: Record<Key, string> = {
   'error.invalid_tag': 'Enter a tag name',
   'error.unknown_folder': 'The folder no longer exists',
   'error.api_unavailable': 'Cannot reach the API. Try again later',
+  'error.page_unavailable': 'Could not fetch the page. Try again later',
   'error.unavailable': 'Deleted or private, so it cannot be fetched',
   'error.generic': 'Something went wrong. Try again',
 }

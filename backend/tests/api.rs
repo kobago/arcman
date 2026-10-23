@@ -24,6 +24,8 @@ const PASSWORD: &str = "correct horse battery";
 struct Upstream {
     statuses: HashMap<String, (u16, Value)>,
     videos: HashMap<String, (u16, Value)>,
+    /// Web pages by name: status, content type and body.
+    pages: HashMap<String, (u16, &'static str, String)>,
     missing_files: HashSet<String>,
 }
 
@@ -70,6 +72,25 @@ async fn fake_thumbnail(
     fake_file(State(fake), Path(format!("{id}/{name}"))).await
 }
 
+async fn fake_page(State(fake): State<Fake>, Path(name): Path<String>) -> impl IntoResponse {
+    match fake.lock().unwrap().pages.get(&name).cloned() {
+        Some((code, content_type, body)) => (
+            StatusCode::from_u16(code).unwrap(),
+            [(header::CONTENT_TYPE, content_type)],
+            body,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn fake_image(State(fake): State<Fake>, Path(name): Path<String>) -> impl IntoResponse {
+    if fake.lock().unwrap().missing_files.contains(&name) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    ([(header::CONTENT_TYPE, "image/png")], format!("IMG:{name}")).into_response()
+}
+
 async fn spawn_upstream() -> (String, Fake) {
     let fake = Fake::default();
     let router = Router::new()
@@ -77,6 +98,8 @@ async fn spawn_upstream() -> (String, Fake) {
         .route("/files/{name}", get(fake_file))
         .route("/oembed", get(fake_oembed))
         .route("/vi/{id}/{name}", get(fake_thumbnail))
+        .route("/pages/{name}", get(fake_page))
+        .route("/images/{name}", get(fake_image))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -195,6 +218,14 @@ impl TestApp {
             .unwrap()
             .videos
             .insert(id.to_string(), (200, video));
+    }
+
+    fn page(&self, name: &str, code: u16, html: &str) -> String {
+        self.fake.lock().unwrap().pages.insert(
+            name.to_string(),
+            (code, "text/html; charset=utf-8", html.to_string()),
+        );
+        format!("{}/pages/{name}", self.base)
     }
 
     fn file(&self, name: &str) -> String {
@@ -447,7 +478,7 @@ async fn several_urls_are_saved_in_one_request_with_a_result_per_line() {
         .call(
             "POST",
             "/api/posts",
-            Some(json!({ "urls": ["https://x.com/a/status/104", "", "https://example.com/x", "https://x.com/a/status/105"] })),
+            Some(json!({ "urls": ["https://x.com/a/status/104", "", "example.com/no-scheme", "https://x.com/a/status/105"] })),
         )
         .await;
     let outcomes: Vec<&str> = v
@@ -1333,4 +1364,154 @@ async fn live_youtube_video_is_saved_with_its_thumbnail() {
     assert_eq!(d["video"]["channel"]["name"], "Rick Astley");
     let file = app.state.media_dir.join(id.to_string()).join("main-0.jpg");
     assert!(std::fs::metadata(&file).unwrap().len() > 10_000);
+}
+
+#[tokio::test]
+async fn a_web_page_is_bookmarked_with_its_share_image_and_icon() {
+    let app = TestApp::start().await;
+    let url = app.page(
+        "harbor",
+        200,
+        r#"<html lang="ja"><head><title>fallback</title>
+          <meta property="og:title" content="港町の朝">
+          <meta property="og:description" content="朝の港を歩いた記録">
+          <meta property="og:site_name" content="Harbor Notes">
+          <meta property="og:image" content="/images/cover.png">
+          <link rel="icon" href="/images/icon.png"></head></html>"#,
+    );
+    let id = app.save(&format!("{url}?utm_source=feed#top"), None).await;
+
+    let tile = app.tiles("").await["tiles"][0].clone();
+    assert_eq!(tile["kind"], "web");
+    assert_eq!(tile["text"], "港町の朝\n朝の港を歩いた記録");
+    assert_eq!(tile["author_name"], "Harbor Notes");
+    assert_eq!(
+        (tile["width"].clone(), tile["height"].clone()),
+        (json!(1200), json!(630))
+    );
+    assert_eq!(
+        app.call("GET", tile["src"].as_str().unwrap(), None).await.1,
+        "IMG:cover.png"
+    );
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["source"], "web");
+    assert_eq!(d["status_id"], url);
+    let page = &d["page"];
+    assert_eq!(page["url"], url);
+    assert_eq!(page["title"], "港町の朝");
+    assert_eq!(page["description"], "朝の港を歩いた記録");
+    assert_eq!(page["host"], "127.0.0.1");
+    assert_eq!(page["image"]["src"], tile["src"]);
+    assert_eq!(
+        app.call("GET", page["icon"].as_str().unwrap(), None)
+            .await
+            .1,
+        "IMG:icon.png"
+    );
+    assert_eq!(app.tile_post_ids("q=歩いた").await, vec![id]);
+
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": [format!("{url}?fbclid=x")] })),
+        )
+        .await;
+    assert_eq!(v[0]["outcome"], "duplicate");
+    assert_eq!(v[0]["post_id"], id);
+}
+
+#[tokio::test]
+async fn a_missing_or_non_image_share_image_still_saves_the_bookmark() {
+    let app = TestApp::start().await;
+    app.fake
+        .lock()
+        .unwrap()
+        .missing_files
+        .insert("gone.png".into());
+    let url = app.page(
+        "noimage",
+        200,
+        &format!(
+            r#"<meta property="og:image" content="/images/gone.png"><link rel="icon" href="{}">"#,
+            app.page("not-an-icon", 200, "<p>html</p>")
+        ),
+    );
+    let id = app.save(&url, None).await;
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["state"], "done");
+    assert!(d["page"]["image"].is_null());
+    assert!(d["page"]["icon"].is_null());
+    assert_eq!(d["page"]["title"], "noimage");
+    let tile = app.tiles("").await["tiles"][0].clone();
+    assert_eq!(tile["kind"], "web");
+    assert!(tile.get("src").is_none());
+}
+
+#[tokio::test]
+async fn missing_pages_are_rejected_and_blocked_ones_fail_until_retried() {
+    let app = TestApp::start().await;
+    let gone = app.page("gone", 410, "");
+    let blocked = app.page("blocked", 403, "");
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": [gone, blocked] })),
+        )
+        .await;
+    assert_eq!(v[0]["outcome"], "unavailable");
+    assert_eq!(v[0]["reason"], "not_found");
+    assert_eq!(v[1]["outcome"], "created");
+    let id = v[1]["post_id"].as_i64().unwrap();
+    let tile = app.tiles("").await["tiles"][0].clone();
+    assert_eq!(tile["kind"], "failed");
+    assert_eq!(tile["failure"], "page_unavailable");
+
+    let (s, v) = app
+        .call("POST", &format!("/api/posts/{id}/retry"), None)
+        .await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY);
+    assert_eq!(v["error"], "page_unavailable");
+    app.page("blocked", 200, "<title>open now</title>");
+    app.call("POST", &format!("/api/posts/{id}/retry"), None)
+        .await;
+    assert_eq!(
+        app.wait_until_settled(id).await["page"]["title"],
+        "open now"
+    );
+}
+
+#[tokio::test]
+async fn web_pages_have_their_own_media_type() {
+    let app = TestApp::start().await;
+    app.upstream("160", app.status("160", "text"));
+    let text = app.save("https://x.com/a/status/160", None).await;
+    let page = app
+        .save(&app.page("p", 200, "<title>p</title>"), None)
+        .await;
+
+    assert_eq!(app.tile_post_ids("media=web").await, vec![page]);
+    assert_eq!(app.tile_post_ids("media=text").await, vec![text]);
+}
+
+#[tokio::test]
+#[ignore = "hits real web pages and their images"]
+async fn live_web_pages_are_bookmarked_with_their_share_images() {
+    let app = TestApp::start().await;
+    for url in [
+        "https://github.com/rust-lang/rust",
+        "https://www.rust-lang.org/",
+    ] {
+        let id = app.save(url, None).await;
+        let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+        assert_eq!(d["state"], "done", "{url}: {d}");
+        assert!(
+            !d["page"]["title"].as_str().unwrap().is_empty(),
+            "{url}: {d}"
+        );
+        assert!(d["page"]["image"]["src"].is_string(), "{url}: {d}");
+    }
 }

@@ -28,6 +28,7 @@
 | `auth.rs` | パスワード、セッション、ログイン失敗の制限、認証ミドルウェア |
 | `fxtwitter.rs` | URL から投稿IDを取り出す、API 呼び出し、レスポンスの型 |
 | `youtube.rs` | URL から動画IDを取り出す、oEmbed の呼び出し、サムネイルのダウンロード計画 |
+| `web.rs` | URL の正規化、ページの取得とメタデータの読み取り（scraper、文字コードは encoding_rs）、画像とアイコンのダウンロード計画 |
 | `archive.rs` | メディアのダウンロード計画と、1件ずつ処理するワーカー |
 | `posts.rs` | 投稿の保存、タイル、詳細、削除、再試行、フォルダの移動、タグの付け替え |
 | `organize.rs` | カテゴリとフォルダ |
@@ -90,7 +91,7 @@ arcman set-password               パスワードを設定する（端末なら2
 | `q` | 本文とタグ名の部分一致 |
 | `tags` | タグ ID のカンマ区切り（AND） |
 | `from`、`to` | 保存日時の範囲（ISO 8601。`to` は含まない） |
-| `media` | `photo`、`video`（GIF を含む）、`text`（ここまでは x.com の投稿だけ）、`youtube` |
+| `media` | `photo`、`video`（GIF を含む）、`text`（ここまでは x.com の投稿だけ）、`youtube`、`web` |
 | `author` | 投稿者のスクリーンネーム |
 | `order` | `desc`（既定）、`asc` |
 
@@ -142,11 +143,21 @@ arcman set-password               パスワードを設定する（端末なら2
 
 YouTube の動画は、2 の代わりに `GET https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v={id}` を呼ぶ。`400` と `404` は `not_found`、`401` と `403` は `private` として保存しない（埋め込みを禁止した動画も `401` になるので保存できない）。ワーカーはサムネイルだけを保存する。`maxresdefault.jpg` を試し、なければ oEmbed の `thumbnail_url`（`hqdefault.jpg`）にする。サムネイルは 4:3 に黒帯を足した画像のことがあるので、タイルの縦横比は 16:9（ショートは 9:16）にして切り抜く
 
+Web ページは、2 の代わりにページを `GET` する（20秒で打ち切り、HTML は先頭 1MB まで読む）。
+
+- `404` と `410` は `not_found` として保存しない。ほかの失敗は `page_unavailable` の失敗として保存する
+- 文字コードは `Content-Type` の `charset`、なければ先頭の `<meta>` の宣言、なければ UTF-8 で読む
+- `og:*`、`twitter:*`、`<title>`、`description`、`<link rel="apple-touch-icon">`・`<link rel="icon">`（なければ `/favicon.ico`）を読み、相対 URL はリダイレクト後の URL で解決する。画像の URL を直接保存したときは、その画像を OGP 画像として扱う
+- スナップショットには読み取ったメタデータ（`url`、`title`、`description`、`site_name`、`image`、`icon`、`lang`）を保存する
+- 画像とアイコンは取れなくても完了にする（`Content-Type` が `image/` でないものも保存しない）。画像の大きさがわからなければ 1200×630 として扱う
+
+ページの取得はログインした利用者の操作で行うので、LAN 内のアドレスも制限しない
+
 ファイルは `media/{post_id}/{role}-{position}.{ext}` に `.part` で書いてから名前を変える。
 
 ## 5. 詳細のレスポンス
 
-スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。YouTube の動画は `status` の代わりに `video`（ID、URL、ショートか、タイトル、チャンネル、サムネイル）を返す。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
+スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。YouTube の動画は `status` の代わりに `video`（ID、URL、ショートか、タイトル、チャンネル、サムネイル）を、Web ページは `page`（URL、タイトル、説明文、サイト名、ドメイン、画像、アイコン）を返す。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
 
 ## 6. SPA の配信
 

@@ -1,6 +1,6 @@
 # ARCMAN
 
-x.com の投稿をブックマークし、画像や動画ごと手元に保存するセルフホストのアーカイブマネージャー。YouTube の動画もリンクとサムネイルを保存できる。
+x.com の投稿をブックマークし、画像や動画ごと手元に保存するセルフホストのアーカイブマネージャー。YouTube の動画と一般の Web ページも、リンクとサムネイル付きでブックマークできる。
 
 ## Linux サーバーで常駐させる
 
@@ -40,7 +40,7 @@ cd frontend && bun run dev                # 画面（/api と /media は 3000 �
 
 | コマンド | 内容 |
 |---|---|
-| `cargo test`（backend） | API のテスト。`cargo test -- --ignored` で本物の fxtwitter と YouTube を使うテストも動く |
+| `cargo test`（backend） | API のテスト。`cargo test -- --ignored` で本物の fxtwitter、YouTube、Web ページを使うテストも動く |
 | `bun run test`（frontend） | Vitest |
 | `bun run e2e`（frontend） | Playwright。初回は `bunx playwright install chromium` が必要 |
 | `make test` | 上の3つをまとめて実行 |

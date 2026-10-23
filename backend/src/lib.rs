@@ -7,6 +7,7 @@ pub mod organize;
 pub mod posts;
 pub mod settings;
 pub mod tags;
+pub mod web;
 pub mod youtube;
 
 use std::{

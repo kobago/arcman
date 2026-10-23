@@ -130,6 +130,7 @@ pub fn plan(oembed: &Oembed, shorts: bool) -> Vec<Download> {
         kind: "photo",
         fallback_url: (largest != *thumb).then(|| thumb.clone()),
         url: largest,
+        optional: false,
         thumbnail_url: None,
         width: Some(width),
         height: Some(height),

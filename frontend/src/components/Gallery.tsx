@@ -33,6 +33,14 @@ function useWidth() {
   return [ref, width] as const
 }
 
+function hostOf(url: string) {
+  try {
+    return new URL(url).host.replace(/^www\./, '')
+  } catch {
+    return url
+  }
+}
+
 function TileBody({ tile }: { tile: Tile }) {
   const { t } = useI18n()
   const qc = useQueryClient()
@@ -65,6 +73,28 @@ function TileBody({ tile }: { tile: Tile }) {
           <span className="tile-caption ellipsis">{tile.text}</span>
         </>
       )
+    case 'web': {
+      const [title, ...rest] = (tile.text ?? '').split('\n')
+      return tile.src ? (
+        <>
+          <img src={tile.src} alt="" loading="lazy" decoding="async" />
+          <span className="badge">
+            <Icon name="link" size={13} strokeWidth={2} />
+          </span>
+          <span className="tile-caption ellipsis">{title}</span>
+        </>
+      ) : (
+        <div className="tile-text">
+          <p>
+            <span className="strong">{title}</span>
+            {rest.length > 0 && `\n${rest.join('\n')}`}
+          </p>
+          <span className="tile-author ellipsis">
+            <Icon name="link" size={12} strokeWidth={2} /> {tile.author_name}
+          </span>
+        </div>
+      )
+    }
     case 'text':
       return (
         <div className="tile-text">
@@ -86,6 +116,7 @@ function TileBody({ tile }: { tile: Tile }) {
         <div className="tile-state failed">
           <span className="danger-text">{t('tile.failed')}</span>
           {tile.failure && <span className="muted small">{t(`failure.${tile.failure}` as 'failure.api_unavailable')}</span>}
+          <span className="muted small ellipsis tile-host">{hostOf(tile.url)}</span>
           <button
             type="button"
             className="btn btn-sm"

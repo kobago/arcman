@@ -11,7 +11,7 @@ use tokio::{io::AsyncWriteExt, sync::mpsc};
 use crate::{
     AppState,
     fxtwitter::{MediaItem, Status},
-    youtube,
+    web, youtube,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,6 +22,8 @@ pub struct Download {
     pub url: String,
     /// Tried when `url` cannot be downloaded.
     pub fallback_url: Option<String>,
+    /// Skipped instead of failing the post when it cannot be downloaded or is not an image.
+    pub optional: bool,
     pub thumbnail_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -29,13 +31,14 @@ pub struct Download {
 }
 
 impl Download {
-    fn photo(role: &'static str, position: i64, url: &str) -> Self {
+    pub fn photo(role: &'static str, position: i64, url: &str) -> Self {
         Self {
             role,
             position,
             kind: "photo",
             url: url.to_string(),
             fallback_url: None,
+            optional: false,
             thumbnail_url: None,
             width: None,
             height: None,
@@ -106,6 +109,7 @@ fn media_downloads(role: &'static str, items: &[MediaItem]) -> Vec<Download> {
                 m.best_mp4().to_string()
             },
             fallback_url: None,
+            optional: false,
             thumbnail_url: m.thumbnail_url.clone().filter(|_| kind != "photo"),
             width: m.width,
             height: m.height,
@@ -200,7 +204,13 @@ impl ProgressMap {
     }
 }
 
-async fn download(state: &AppState, post_id: i64, url: &str, dest: &Path) -> Result<(), String> {
+async fn download(
+    state: &AppState,
+    post_id: i64,
+    url: &str,
+    dest: &Path,
+    image_only: bool,
+) -> Result<(), String> {
     let mut res = state
         .http
         .get(url)
@@ -208,6 +218,14 @@ async fn download(state: &AppState, post_id: i64, url: &str, dest: &Path) -> Res
         .await
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("{url}: {e}"))?;
+    let content_type = res
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if image_only && !content_type.starts_with("image/") {
+        return Err(format!("{url}: not an image ({content_type})"));
+    }
     let size = res.content_length();
     state
         .progress
@@ -252,6 +270,9 @@ async fn archive_post(state: &AppState, post_id: i64) {
             let oembed = serde_json::from_str::<youtube::Oembed>(&s).ok()?;
             Some(youtube::plan(&oembed, shorts))
         }
+        "web" => serde_json::from_str::<web::Page>(&s)
+            .ok()
+            .map(|p| web::plan(&p)),
         _ => serde_json::from_str::<Status>(&s).ok().map(|s| plan(&s)),
     });
     let Some(downloads) = downloads else {
@@ -268,17 +289,29 @@ async fn archive_post(state: &AppState, post_id: i64) {
     let mut result = tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| e.to_string());
+    let mut saved = vec![];
     for d in &downloads {
         if result.is_err() {
             break;
         }
-        result = download(state, post_id, &d.url, &dir.join(d.file_name())).await;
-        if let (Err(e), Some(fallback)) = (&result, &d.fallback_url) {
+        let dest = dir.join(d.file_name());
+        let mut file = download(state, post_id, &d.url, &dest, d.optional).await;
+        if let (Err(e), Some(fallback)) = (&file, &d.fallback_url) {
             eprintln!("archive {post_id}: {e}; trying {fallback}");
-            result = download(state, post_id, fallback, &dir.join(d.file_name())).await;
+            file = download(state, post_id, fallback, &dest, d.optional).await;
         }
-        if let (Ok(()), Some(thumb), Some(name)) = (&result, &d.thumbnail_url, d.thumbnail_name()) {
-            result = download(state, post_id, thumb, &dir.join(name)).await;
+        if let (Ok(()), Some(thumb), Some(name)) = (&file, &d.thumbnail_url, d.thumbnail_name()) {
+            file = download(state, post_id, thumb, &dir.join(name), false).await;
+        }
+        match file {
+            Ok(()) => saved.push(d.clone()),
+            Err(e) if d.optional => {
+                eprintln!("archive {post_id}: skipped {e}");
+                state.progress.update(post_id, |p| {
+                    (p.files_done, p.received, p.size) = (p.files_done + 1, 0, None)
+                });
+            }
+            Err(e) => result = Err(e),
         }
     }
     if let Err(e) = &result {
@@ -288,7 +321,7 @@ async fn archive_post(state: &AppState, post_id: i64) {
         state,
         post_id,
         result.map_err(|_| "media_download".into()),
-        &downloads,
+        &saved,
     );
     state.progress.remove(post_id);
 }

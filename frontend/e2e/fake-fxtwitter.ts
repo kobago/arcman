@@ -57,6 +57,15 @@ const videos: Record<string, unknown> = {
   },
 }
 
+const pages: Record<string, string> = {
+  harbor: `<html lang="ja"><head><title>港町の朝 | Harbor Notes</title>
+    <meta property="og:title" content="港町の朝を歩く">
+    <meta property="og:description" content="朝の港を歩いた記録">
+    <meta property="og:site_name" content="Harbor Notes">
+    <meta property="og:image" content="/files/harbor.png"></head></html>`,
+  plain: '<title>画像のないページ</title><meta name="description" content="説明だけのページ">',
+}
+
 Bun.serve({
   port: PORT,
   hostname: '127.0.0.1',
@@ -68,6 +77,8 @@ Bun.serve({
       const found = statuses[statusMatch[1]]
       return Response.json({ code: found ? 200 : 404, status: found ?? null }, { status: found ? 200 : 404 })
     }
+    const page = pathname.match(/^\/pages\/(\w+)$/)
+    if (page && pages[page[1]]) return new Response(pages[page[1]], { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
     if (pathname === '/oembed') {
       const watch = new URL(new URL(req.url).searchParams.get('url') ?? '')
       const found = videos[watch.searchParams.get('v') ?? '']

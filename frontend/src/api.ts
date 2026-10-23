@@ -1,4 +1,4 @@
-export type TileKind = 'photo' | 'video' | 'gif' | 'youtube' | 'text' | 'pending' | 'failed'
+export type TileKind = 'photo' | 'video' | 'gif' | 'youtube' | 'web' | 'text' | 'pending' | 'failed'
 
 export type Tile = {
   post_id: number
@@ -56,9 +56,19 @@ export type VideoView = {
   thumbnail: string | null
 }
 
+export type PageView = {
+  url: string
+  title: string
+  description: string | null
+  site_name: string | null
+  host: string
+  image: MediaView | null
+  icon: string | null
+}
+
 export type PostDetail = {
   id: number
-  source: 'x' | 'youtube'
+  source: 'x' | 'youtube' | 'web'
   status_id: string
   url: string
   state: 'pending' | 'done' | 'failed'
@@ -68,6 +78,7 @@ export type PostDetail = {
   tags: TagRef[]
   status: StatusView | null
   video?: VideoView
+  page?: PageView
 }
 
 export type Folder = { id: number; name: string; category_id: number | null }

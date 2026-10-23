@@ -944,6 +944,9 @@ hr {
   -webkit-box-orient: vertical;
   white-space: pre-wrap;
 }
+.tile-host {
+  max-width: 100%;
+}
 .tile-author {
   font-size: 12px;
 }
@@ -1142,6 +1145,20 @@ hr {
   display: flex;
   flex-direction: column;
   line-height: 1.4;
+}
+.site-icon {
+  border-radius: 8px;
+  object-fit: contain;
+  background: #fff;
+}
+.site-icon.empty {
+  display: grid;
+  place-items: center;
+  background: var(--raised);
+  color: var(--muted);
+}
+.source-link {
+  max-width: 100%;
 }
 .author-names a {
   color: inherit;

@@ -13,7 +13,7 @@ use crate::{
     AppState,
     error::{ApiError, ApiResult},
     fxtwitter::{self, Card, FetchError, Note, Status, Translation},
-    settings, tags, youtube,
+    settings, tags, web, youtube,
 };
 
 pub fn remove_media_dir(state: &AppState, post_id: i64) {
@@ -42,6 +42,8 @@ fn ensure_folder(conn: &Connection, id: Option<i64>) -> ApiResult<()> {
 enum Target {
     X(String),
     Youtube(youtube::Video),
+    /// Any other web page, by its normalized URL.
+    Web(String),
 }
 
 impl Target {
@@ -49,12 +51,14 @@ impl Target {
         fxtwitter::parse_status_id(url)
             .map(Self::X)
             .or_else(|| youtube::parse_video(url).map(Self::Youtube))
+            .or_else(|| web::normalize(url).map(Self::Web))
     }
 
     fn source(&self) -> &'static str {
         match self {
             Self::X(_) => "x",
             Self::Youtube(_) => "youtube",
+            Self::Web(_) => "web",
         }
     }
 
@@ -62,6 +66,7 @@ impl Target {
         match self {
             Self::X(id) => id,
             Self::Youtube(v) => &v.id,
+            Self::Web(url) => url,
         }
     }
 }
@@ -76,11 +81,30 @@ struct Snapshot {
     posted_at: Option<i64>,
 }
 
+fn unreachable_failure(source: &str) -> &'static str {
+    if source == "web" {
+        "page_unavailable"
+    } else {
+        "api_unavailable"
+    }
+}
+
 async fn fetch_snapshot(
     state: &AppState,
     source: &str,
     status_id: &str,
 ) -> Result<Snapshot, FetchError> {
+    if source == "web" {
+        let (raw, page) = web::fetch(&state.http, status_id).await?;
+        return Ok(Snapshot {
+            raw,
+            author_screen_name: page.host(),
+            author_name: page.site_name.clone().unwrap_or_else(|| page.host()),
+            text: page.text(),
+            lang: page.lang,
+            posted_at: None,
+        });
+    }
     if source == "youtube" {
         let (raw, video) =
             youtube::fetch(&state.http, &state.youtube_oembed_url, status_id).await?;
@@ -185,8 +209,14 @@ pub async fn create(
             let db = state.db();
             let inserted = db.execute(
                 "INSERT INTO posts (source, status_id, source_url, state, failure, folder_id)
-                 VALUES (?1, ?2, ?3, 'failed', 'api_unavailable', ?4) ON CONFLICT (status_id) DO NOTHING",
-                params![target.source(), status_id, url, input.folder_id],
+                 VALUES (?1, ?2, ?3, 'failed', ?4, ?5) ON CONFLICT (status_id) DO NOTHING",
+                params![
+                    target.source(),
+                    status_id,
+                    url,
+                    unreachable_failure(target.source()),
+                    input.folder_id
+                ],
             )?;
             let id: i64 = db.query_row(
                 "SELECT id FROM posts WHERE status_id = ?1",
@@ -232,7 +262,7 @@ pub async fn retry(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRes
             Err(FetchError::Unavailable(reason)) => return Err(ApiError::Unprocessable(reason)),
             Err(FetchError::Transport(e)) => {
                 eprintln!("fetch {status_id}: {e}");
-                return Err(ApiError::BadGateway("api_unavailable"));
+                return Err(ApiError::BadGateway(unreachable_failure(&source)));
             }
         }
     }
@@ -343,15 +373,16 @@ pub async fn tiles(
         }
     }
     let media_kinds: Option<&[&str]> = match q.media.as_deref() {
-        None | Some("youtube") => None,
+        None | Some("youtube" | "web") => None,
         Some("photo") => Some(&["photo"]),
         Some("video") => Some(&["video", "gif"]),
         Some("text") => Some(&[]),
         Some(_) => return Err(ApiError::BadRequest("invalid_media")),
     };
-    // The other media types are about X posts; a YouTube video is its own type.
-    if q.media.as_deref() == Some("youtube") {
-        wh.push(format!("p.source = 'youtube' AND EXISTS ({MAIN_MEDIA_OF})"));
+    // The other media types are about X posts; YouTube videos and web pages are types of their own.
+    if let Some(source @ ("youtube" | "web")) = q.media.as_deref() {
+        wh.push("p.source = ? AND p.state = 'done'".into());
+        args.push(source.to_string().into());
     } else if media_kinds.is_some() {
         wh.push("p.source = 'x'".into());
     }
@@ -477,6 +508,18 @@ pub async fn tiles(
                 failure: row.failure.clone(),
                 ..base("failed")
             }),
+            _ if row.source == "web" => {
+                let image = media.get(&row.id).and_then(|items| items.first());
+                tiles.push(Tile {
+                    src: image.map(|m| media_url(row.id, &m.file)),
+                    width: image.and_then(|m| m.width),
+                    height: image.and_then(|m| m.height),
+                    text: Some(row.text.clone()),
+                    author_name: Some(row.author_name.clone()),
+                    author_screen_name: Some(row.author_screen_name.clone()),
+                    ..base("web")
+                })
+            }
             _ => match media.get(&row.id) {
                 None => tiles.push(Tile {
                     text: Some(row.text.clone()),
@@ -616,6 +659,17 @@ pub struct VideoView {
 }
 
 #[derive(Serialize)]
+pub struct PageView {
+    url: String,
+    title: String,
+    description: Option<String>,
+    site_name: Option<String>,
+    host: String,
+    image: Option<MediaView>,
+    icon: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct Detail {
     id: i64,
     source: String,
@@ -629,6 +683,8 @@ pub struct Detail {
     status: Option<StatusView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     video: Option<VideoView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<PageView>,
 }
 
 struct MediaRow {
@@ -759,6 +815,7 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
                 tags: vec![],
                 status: None,
                 video: None,
+                page: None,
             };
             Ok((detail, r.get::<_, Option<String>>(7)?))
         },
@@ -814,6 +871,19 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
                         url: o.author_url,
                     },
                     thumbnail: local.first("main"),
+                });
+        }
+        "web" => {
+            detail.page = snapshot
+                .and_then(|s| serde_json::from_str::<web::Page>(&s).ok())
+                .map(|p| PageView {
+                    host: p.host(),
+                    url: p.url,
+                    title: p.title,
+                    description: p.description,
+                    site_name: p.site_name,
+                    image: local.by_role("main").into_iter().next(),
+                    icon: local.first("avatar"),
                 });
         }
         _ => {

@@ -75,6 +75,28 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE media ADD COLUMN duration REAL;",
     // A YouTube video id (11 characters) never looks like an X status id, so status_id stays unique on its own.
     "ALTER TABLE posts ADD COLUMN source TEXT NOT NULL DEFAULT 'x' CHECK (source IN ('x', 'youtube'));",
+    // SQLite cannot change a CHECK constraint, so the table is rebuilt to allow web pages.
+    "CREATE TABLE posts_new (
+        id INTEGER PRIMARY KEY,
+        status_id TEXT NOT NULL UNIQUE,
+        source_url TEXT NOT NULL,
+        author_screen_name TEXT NOT NULL DEFAULT '',
+        author_name TEXT NOT NULL DEFAULT '',
+        text TEXT NOT NULL DEFAULT '',
+        lang TEXT,
+        posted_at TEXT,
+        saved_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        state TEXT NOT NULL CHECK (state IN ('pending', 'done', 'failed')),
+        failure TEXT,
+        snapshot TEXT,
+        folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+        source TEXT NOT NULL DEFAULT 'x' CHECK (source IN ('x', 'youtube', 'web'))
+    );
+    INSERT INTO posts_new SELECT * FROM posts;
+    DROP TABLE posts;
+    ALTER TABLE posts_new RENAME TO posts;
+    CREATE INDEX posts_saved_at ON posts (saved_at, id);
+    CREATE INDEX posts_folder ON posts (folder_id);",
 ];
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -85,12 +107,15 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
         conn.execute_batch(&format!("BEGIN; {SCHEMA} PRAGMA user_version = 1; COMMIT;"))?;
         version = 1;
     }
+    // Rebuilding a table must not cascade deletes into the tables that point at it.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
     for (i, migration) in MIGRATIONS.iter().enumerate().skip(version - 1) {
         conn.execute_batch(&format!(
             "BEGIN; {migration} PRAGMA user_version = {}; COMMIT;",
             i + 2
         ))?;
     }
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     Ok(conn)
 }
 
@@ -108,6 +133,13 @@ mod tests {
                 .unwrap();
             conn.execute("INSERT INTO categories (name) VALUES ('kept')", [])
                 .unwrap();
+            conn.execute_batch(
+                "INSERT INTO posts (id, status_id, source_url, state) VALUES (7, '1', 'u', 'done');
+                 INSERT INTO media (post_id, role, position, kind, file, remote_url) VALUES (7, 'main', 0, 'photo', 'f', 'r');
+                 INSERT INTO tags (id, name, key) VALUES (1, 't', 't');
+                 INSERT INTO post_tags VALUES (7, 1);",
+            )
+            .unwrap();
         }
         let conn = open(&path).unwrap();
         let version: i64 = conn
@@ -115,8 +147,21 @@ mod tests {
             .unwrap();
         assert_eq!(version as usize, MIGRATIONS.len() + 1);
         conn.execute("UPDATE media SET duration = 1.5", []).unwrap();
-        conn.execute("UPDATE posts SET source = 'youtube'", [])
+        conn.execute("UPDATE posts SET source = 'web'", []).unwrap();
+        let kept: (i64, i64, String) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM media), (SELECT COUNT(*) FROM post_tags), source FROM posts WHERE id = 7",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .unwrap();
+        assert_eq!(kept, (1, 1, "web".into()));
+        // Foreign keys are back on: deleting the post still cascades.
+        conn.execute("DELETE FROM posts WHERE id = 7", []).unwrap();
+        let media: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(media, 0);
         let name: String = conn
             .query_row("SELECT name FROM categories", [], |r| r.get(0))
             .unwrap();

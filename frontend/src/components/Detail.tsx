@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router'
-import { api, type MediaView, type PostDetail, type StatusView, type Tile, type VideoView } from '../api'
+import { api, type MediaView, type PageView, type PostDetail, type StatusView, type Tile, type VideoView } from '../api'
 import { formatCount, formatDateTime, swipeDirection } from '../format'
 import { errorMessage, useI18n } from '../i18n'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -28,6 +28,10 @@ function Media({ media }: { media: MediaView }) {
 function TilePreview({ tile }: { tile: Tile }) {
   if (tile.kind === 'photo' || tile.kind === 'youtube') return <img className="stage-media" src={tile.src} alt="" draggable={false} />
   if (tile.kind === 'video' || tile.kind === 'gif') return <img className="stage-media" src={tile.thumbnail} alt="" draggable={false} />
+  if (tile.kind === 'web') {
+    if (tile.src) return <img className="stage-media" src={tile.src} alt="" draggable={false} />
+    return <div className="stage-text">{tile.text?.split('\n')[0]}</div>
+  }
   if (tile.kind === 'text') return <div className="stage-text">{tile.text}</div>
   return null
 }
@@ -60,6 +64,32 @@ function VideoInfo({ video }: { video: VideoView }) {
         </a>
       </div>
       <p className="post-text">{video.title}</p>
+    </>
+  )
+}
+
+function PageInfo({ page }: { page: PageView }) {
+  const { t } = useI18n()
+  return (
+    <>
+      <div className="author">
+        {page.icon ? (
+          <img className="avatar site-icon" src={page.icon} alt="" />
+        ) : (
+          <span className="avatar site-icon empty">
+            <Icon name="link" size={18} strokeWidth={2} />
+          </span>
+        )}
+        <div className="author-names">
+          <span className="strong ellipsis">{page.site_name ?? page.host}</span>
+          {page.site_name && <span className="muted small ellipsis">{page.host}</span>}
+        </div>
+        <a href={page.url} target="_blank" rel="noreferrer" className="link-small">
+          {t('detail.openPage')} <Icon name="external" size={13} strokeWidth={2} />
+        </a>
+      </div>
+      <p className="post-text strong">{page.title}</p>
+      {page.description && <p className="post-text muted">{page.description}</p>}
     </>
   )
 }
@@ -195,6 +225,12 @@ function Panel({ post }: { post: PostDetail }) {
     <>
       {post.status && <Status status={post.status} />}
       {post.video && <VideoInfo video={post.video} />}
+      {post.page && <PageInfo page={post.page} />}
+      {post.state === 'failed' && (
+        <a href={post.url} target="_blank" rel="noreferrer" className="link-small source-link">
+          <span className="ellipsis">{post.url}</span> <Icon name="external" size={13} strokeWidth={2} />
+        </a>
+      )}
       <dl className="dates">
         {post.status?.posted_at && (
           <>
@@ -541,6 +577,12 @@ export function Detail() {
               </div>
             ) : post.video ? (
               <YoutubePlayer video={post.video} />
+            ) : post.page ? (
+              post.page.image ? (
+                <img className="stage-media" src={post.page.image.src} alt="" draggable={false} />
+              ) : (
+                <div className="stage-text">{post.page.title}</div>
+              )
             ) : current ? (
               <Media media={current} />
             ) : (

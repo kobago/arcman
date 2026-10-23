@@ -39,11 +39,11 @@ test('a wrong password is rejected and the right one opens the gallery', async (
 
 test('saving several URLs reports each line and shows one tile per image', async ({ page }) => {
   await login(page)
-  await save(page, 'https://x.com/alice/status/1001', 'https://example.com/not-a-post')
+  await save(page, 'https://x.com/alice/status/1001', 'example.com/no-scheme')
 
   const toast = page.getByRole('status')
   await expect(toast).toContainText('1件を保存しました')
-  await expect(toast).toContainText('x.com の投稿や YouTube の動画のURLではありません')
+  await expect(toast).toContainText('URLの形式が正しくありません')
   await expect(toast.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
 
   await expect(page.getByRole('link', { name: '投稿を開く (1/2)' }).first()).toBeVisible()
@@ -187,6 +187,23 @@ test('a YouTube link is saved as a video tile that plays in the detail view', as
   await page.getByRole('radio', { name: 'YouTube' }).click()
   await expect(page).toHaveURL(/media=youtube/)
   await expect(page.locator('a[data-testid="tile"]')).toHaveCount(1)
+})
+
+test('a web page is bookmarked with its share image, and one without shows its text', async ({ page }) => {
+  await login(page)
+  await save(page, 'http://127.0.0.1:3191/pages/harbor?utm_source=feed', 'http://127.0.0.1:3191/pages/plain')
+  await expect(page.getByRole('status')).toContainText('2件を保存しました')
+
+  const tiles = page.locator('a[data-testid="tile"].web')
+  await expect(tiles).toHaveCount(2)
+  await expect(tiles.filter({ hasText: '港町の朝を歩く' }).locator('img')).toBeVisible()
+  await expect(tiles.filter({ hasText: '画像のないページ' })).toContainText('説明だけのページ')
+
+  await tiles.filter({ hasText: '港町の朝を歩く' }).click()
+  const panel = page.getByRole('complementary', { name: '投稿の内容' })
+  await expect(panel).toContainText('Harbor Notes')
+  await expect(panel).toContainText('朝の港を歩いた記録')
+  await expect(panel.getByRole('link', { name: 'ページを開く' })).toHaveAttribute('href', 'http://127.0.0.1:3191/pages/harbor')
 })
 
 test.describe('on a phone', () => {
