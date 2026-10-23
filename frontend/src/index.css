@@ -795,6 +795,23 @@ hr {
   color: var(--muted);
   cursor: pointer;
 }
+.zoom {
+  display: flex;
+}
+.zoom .icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  color: var(--muted);
+}
+.zoom .icon-btn:hover:not(:disabled) {
+  background: var(--selected);
+  color: var(--text);
+}
+.zoom .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
 .dropdown {
   position: relative;
 }

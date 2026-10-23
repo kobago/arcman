@@ -2,6 +2,8 @@ const PATHS = {
   menu: 'M4 7h16M4 12h16M4 17h16',
   search: 'M11 4a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM20 20l-3.5-3.5',
   plus: 'M12 5v14M5 12h14',
+  zoomIn: 'M11 4a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM20 20l-3.5-3.5M8 11h6M11 8v6',
+  zoomOut: 'M11 4a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM20 20l-3.5-3.5M8 11h6',
   close: 'M6 6l12 12M18 6L6 18',
   chevronDown: 'M6 9l6 6 6-6',
   chevronLeft: 'M15 6l-6 6 6 6',

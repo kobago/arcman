@@ -93,6 +93,25 @@ test('video tiles show the duration', async ({ page }) => {
   await expect(tilesOf(page, id)).toContainText('0:25')
 })
 
+test('the tile size steps up and down and is kept across reloads', async ({ page }) => {
+  await login(page)
+  const id = await savedPostId(page, '1006')
+  await page.reload()
+  await expect(tilesOf(page, id)).toHaveCount(3)
+  const lastRowHeight = () => page.locator('.gallery-row').last().evaluate((el) => el.getBoundingClientRect().height)
+
+  const before = await lastRowHeight()
+  await page.getByRole('button', { name: 'タイルを大きく' }).click()
+  await expect.poll(lastRowHeight).toBeGreaterThan(before)
+  const larger = await lastRowHeight()
+
+  await page.reload()
+  await expect.poll(lastRowHeight).toBe(larger)
+  await page.getByRole('button', { name: 'タイルを小さく' }).click()
+  await page.getByRole('button', { name: 'タイルを小さく' }).click()
+  await expect.poll(lastRowHeight).toBeLessThan(before)
+})
+
 test('folders can be created in a category, receive saved posts, and take their posts when deleted', async ({ page }) => {
   await login(page)
   const nav = page.getByRole('navigation', { name: 'フォルダ' })

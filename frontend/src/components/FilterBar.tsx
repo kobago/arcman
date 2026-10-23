@@ -7,7 +7,7 @@ import { useDismiss } from '../hooks'
 import { useI18n } from '../i18n'
 import { Icon } from './Icon'
 
-type Props = { filters: Filters; onChange: (f: Filters) => void; title?: ReactNode }
+type Props = { filters: Filters; onChange: (f: Filters) => void; title?: ReactNode; trailing?: ReactNode }
 type Open = 'tags' | 'period' | 'media' | 'author' | null
 
 function Dropdown({ label, open, onToggle, children }: { label: string; open: boolean; onToggle: () => void; children: ReactNode }) {
@@ -35,7 +35,7 @@ function ActiveChip({ label, onRemove }: { label: string; onRemove: () => void }
   )
 }
 
-export function FilterBar({ filters, onChange, title }: Props) {
+export function FilterBar({ filters, onChange, title, trailing }: Props) {
   const { t } = useI18n()
   const [open, setOpen] = useState<Open>(null)
   const [tagQuery, setTagQuery] = useState('')
@@ -148,6 +148,7 @@ export function FilterBar({ filters, onChange, title }: Props) {
         <Icon name="sort" size={14} strokeWidth={2} />
         {t(filters.order === 'desc' ? 'sort.desc' : 'sort.asc')}
       </button>
+      {trailing}
     </div>
   )
 }

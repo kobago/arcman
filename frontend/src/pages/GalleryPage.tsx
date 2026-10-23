@@ -10,6 +10,7 @@ import { SaveBox } from '../components/SaveBox'
 import { Sidebar } from '../components/Sidebar'
 import { folderIdOf, parseFilters, toTileQuery, writeFilters, type Filters } from '../filters'
 import { folderLabel } from '../folders'
+import { MAX_SIZE, useGallerySize } from '../gallerySize'
 import { useI18n } from '../i18n'
 
 export function GalleryPage() {
@@ -20,6 +21,7 @@ export function GalleryPage() {
   const [saveOpen, setSaveOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(!!filters.q)
   const [q, setQ] = useState(filters.q)
+  const [size, setSize] = useGallerySize()
   const sidebar = useQuery({ queryKey: ['sidebar'], queryFn: api.sidebar })
 
   const setFilters = useCallback((f: Filters) => setSp(writeFilters(f)), [setSp])
@@ -102,14 +104,28 @@ export function GalleryPage() {
             <SaveBox variant="sheet" folderId={folderId} destination={destination} />
           </div>
         )}
-        <FilterBar filters={filters} onChange={setFilters} title={<h1 className="desktop-only page-title">{title}</h1>} />
+        <FilterBar
+          filters={filters}
+          onChange={setFilters}
+          title={<h1 className="desktop-only page-title">{title}</h1>}
+          trailing={
+            <div className="zoom" role="group" aria-label={t('zoom.label')}>
+              <button type="button" className="icon-btn" aria-label={t('zoom.out')} disabled={size === 0} onClick={() => setSize(size - 1)}>
+                <Icon name="zoomOut" size={18} />
+              </button>
+              <button type="button" className="icon-btn" aria-label={t('zoom.in')} disabled={size === MAX_SIZE} onClick={() => setSize(size + 1)}>
+                <Icon name="zoomIn" size={18} />
+              </button>
+            </div>
+          }
+        />
 
         {query.isError ? (
           <p className="empty">{t('error.generic')}</p>
         ) : query.isSuccess && tiles.length === 0 ? (
           <p className="empty">{filtered ? t('gallery.noMatch') : t('gallery.empty')}</p>
         ) : (
-          <Gallery tiles={tiles} search={sp.toString() ? `?${sp}` : ''} hasMore={!!hasNextPage} loadingMore={isFetchingNextPage} onLoadMore={loadMore} />
+          <Gallery tiles={tiles} search={sp.toString() ? `?${sp}` : ''} hasMore={!!hasNextPage} loadingMore={isFetchingNextPage} onLoadMore={loadMore} size={size} />
         )}
       </main>
       <Outlet context={context} />

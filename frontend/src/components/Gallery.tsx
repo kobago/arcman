@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { api, type Tile } from '../api'
 import { formatDuration } from '../format'
+import { rowHeight } from '../gallerySize'
 import { useI18n } from '../i18n'
 import { aspectRatio, justify } from '../layout'
 import { Icon, PlayGlyph } from './Icon'
@@ -13,6 +14,7 @@ type Props = {
   hasMore: boolean
   loadingMore: boolean
   onLoadMore: () => void
+  size: number
 }
 
 const tileKey = (t: Pick<Tile, 'post_id' | 'index'>) => `${t.post_id}-${t.index}`
@@ -91,13 +93,13 @@ function TileBody({ tile }: { tile: Tile }) {
   }
 }
 
-export function Gallery({ tiles, search, hasMore, loadingMore, onLoadMore }: Props) {
+export function Gallery({ tiles, search, hasMore, loadingMore, onLoadMore, size }: Props) {
   const { t } = useI18n()
   const [ref, width] = useWidth()
   const sentinel = useRef<HTMLDivElement>(null)
   const narrow = width > 0 && width < 600
   const gap = narrow ? 2 : 4
-  const rows = width ? justify(tiles, (x) => aspectRatio(x.width, x.height), width, narrow ? 120 : 200, gap) : []
+  const rows = width ? justify(tiles, (x) => aspectRatio(x.width, x.height), width, rowHeight(size, narrow), gap) : []
 
   useEffect(() => {
     const el = sentinel.current

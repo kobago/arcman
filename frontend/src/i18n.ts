@@ -77,6 +77,9 @@ const ja = {
   'filter.noTags': 'タグはまだありません',
   'sort.desc': '保存日時：新しい順',
   'sort.asc': '保存日時：古い順',
+  'zoom.label': 'タイルの大きさ',
+  'zoom.in': 'タイルを大きく',
+  'zoom.out': 'タイルを小さく',
 
   'gallery.empty': 'まだ投稿がありません。x.com の投稿URLを貼り付けて保存してください。',
   'gallery.noMatch': '条件に合う投稿がありません。',
@@ -251,6 +254,9 @@ const en: Record<Key, string> = {
   'filter.noTags': 'No tags yet',
   'sort.desc': 'Saved: newest first',
   'sort.asc': 'Saved: oldest first',
+  'zoom.label': 'Tile size',
+  'zoom.in': 'Larger tiles',
+  'zoom.out': 'Smaller tiles',
 
   'gallery.empty': 'Nothing saved yet. Paste an x.com post URL to save it.',
   'gallery.noMatch': 'No posts match these filters.',
