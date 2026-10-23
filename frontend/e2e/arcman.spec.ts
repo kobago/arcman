@@ -195,4 +195,56 @@ test.describe('on a phone', () => {
     await page.getByRole('button', { name: '前へ' }).tap()
     await expect(page.getByTestId('counter')).toHaveText('1 / 2')
   })
+
+  test('the collapsed sheet leaves the image uncovered and a tap hides the controls', async ({ page }) => {
+    await login(page)
+    const id = await savedPostId(page, '1007')
+    await page.goto(`/posts/${id}/0`)
+
+    const stage = page.getByRole('region', { name: 'メディア' })
+    const sheet = page.getByRole('complementary', { name: '投稿の内容' })
+    await expect(sheet.getByText('@alice')).toBeHidden()
+    const stageBox = (await stage.boundingBox())!
+    const sheetBox = (await sheet.boundingBox())!
+    expect(stageBox.y + stageBox.height).toBeLessThanOrEqual(sheetBox.y)
+
+    const close = stage.getByRole('button', { name: '閉じる' })
+    await stage.tap({ position: { x: stageBox.width / 2, y: stageBox.height / 2 } })
+    await expect(close).toBeHidden()
+    await stage.tap({ position: { x: stageBox.width / 2, y: stageBox.height / 2 } })
+    await expect(close).toBeVisible()
+  })
+
+  test('the sheet follows a drag on its handle and settles open or closed', async ({ page }) => {
+    await login(page)
+    const id = await savedPostId(page, '1007')
+    await page.goto(`/posts/${id}/0`)
+
+    const sheet = page.getByRole('complementary', { name: '投稿の内容' })
+    const handle = sheet.getByRole('button', { name: '上にスワイプで詳細' })
+    const sheetTop = async () => (await sheet.boundingBox())!.y
+    const closedTop = await sheetTop()
+    const h = (await handle.boundingBox())!
+    const x = h.x + h.width / 2
+    const y = h.y + h.height / 2
+
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x, y - 150, { steps: 5 })
+    expect(await sheetTop()).toBeCloseTo(closedTop - 150, -1)
+    await page.mouse.up()
+    await expect(handle).toHaveAttribute('aria-expanded', 'true')
+    await expect(sheet.getByText('@alice')).toBeVisible()
+    await expect.poll(sheetTop).toBe(210)
+
+    const open = (await handle.boundingBox())!
+    await page.mouse.move(x, open.y + open.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(x, open.y + 200, { steps: 5 })
+    await page.mouse.up()
+    await expect(handle).toHaveAttribute('aria-expanded', 'false')
+
+    await handle.click()
+    await expect(handle).toHaveAttribute('aria-expanded', 'true')
+  })
 })

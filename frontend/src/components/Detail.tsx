@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router'
 import { api, type MediaView, type PostDetail, type StatusView, type Tile } from '../api'
 import { formatCount, formatDateTime, swipeDirection } from '../format'
@@ -223,6 +223,15 @@ function Panel({ post }: { post: PostDetail }) {
   )
 }
 
+// Matches the open sheet's top and the handle height in index.css.
+const SHEET_OPEN_TOP = 210
+const SHEET_HANDLE = 28
+const SHEET_SNAP = 40
+
+function isTap(dx: number, dy: number) {
+  return Math.abs(dx) < 10 && Math.abs(dy) < 10
+}
+
 function isEditable(target: EventTarget | null) {
   return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 }
@@ -237,8 +246,12 @@ export function Detail() {
   const index = Number(params.index) || 0
   const { tiles, hasMore, loadMore } = useOutletContext<GalleryContext>()
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [immersive, setImmersive] = useState(false)
   const start = useRef<{ x: number; y: number } | null>(null)
   const root = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLElement>(null)
+  const drag = useRef<{ y: number; top: number; moved: boolean } | null>(null)
+  const [dragTop, setDragTop] = useState<number | null>(null)
 
   const { data: post, error } = useQuery({
     queryKey: ['post', postId],
@@ -299,11 +312,20 @@ export function Detail() {
     },
     onPointerUp: (e: PointerEvent) => {
       if (!start.current) return
-      const dir = swipeDirection(e.clientX - start.current.x, e.clientY - start.current.y)
+      const dx = e.clientX - start.current.x
+      const dy = e.clientY - start.current.y
+      const dir = swipeDirection(dx, dy)
       start.current = null
+      if (isTap(dx, dy) && !(e.target as Element).closest('button, a, video')) {
+        if (sheetOpen) setSheetOpen(false)
+        else setImmersive((on) => !on)
+      }
       if (dir === 'left') go(next)
       if (dir === 'right') go(prev)
-      if (dir === 'up') setSheetOpen(true)
+      if (dir === 'up') {
+        setSheetOpen(true)
+        setImmersive(false)
+      }
       if (dir === 'down') {
         if (sheetOpen) setSheetOpen(false)
         else close()
@@ -311,8 +333,50 @@ export function Detail() {
     },
   }
 
+  // The sheet follows the finger while its handle is dragged, then settles open or closed.
+  const handleDrag = {
+    onPointerDown: (e: PointerEvent<HTMLButtonElement>) => {
+      if (!panel.current) return
+      e.currentTarget.setPointerCapture(e.pointerId)
+      drag.current = { y: e.clientY, top: panel.current.offsetTop, moved: false }
+    },
+    onPointerMove: (e: PointerEvent) => {
+      const d = drag.current
+      if (!d || !root.current) return
+      const dy = e.clientY - d.y
+      if (!d.moved && Math.abs(dy) < 5) return
+      d.moved = true
+      setDragTop(Math.min(root.current.clientHeight - SHEET_HANDLE, Math.max(SHEET_OPEN_TOP, d.top + dy)))
+    },
+    onPointerUp: (e: PointerEvent) => {
+      const d = drag.current
+      if (!d?.moved) return
+      const dy = e.clientY - d.y
+      if (dy < -SHEET_SNAP) setSheetOpen(true)
+      if (dy > SHEET_SNAP) setSheetOpen(false)
+      setDragTop(null)
+    },
+    onPointerCancel: () => {
+      drag.current = null
+      setDragTop(null)
+    },
+    onClick: (e: MouseEvent) => {
+      // detail 0 is a keyboard press, which never follows a drag.
+      if (e.detail === 0 || !drag.current?.moved) setSheetOpen((o) => !o)
+      drag.current = null
+    },
+  }
+  const dragging = dragTop !== null
+
   return (
-    <div ref={root} tabIndex={-1} className={sheetOpen ? 'detail sheet-open' : 'detail'} role="dialog" aria-modal="true" aria-label={t('detail.content')}>
+    <div
+      ref={root}
+      tabIndex={-1}
+      className={['detail', (sheetOpen || dragging) && 'sheet-open', dragging && 'sheet-dragging', immersive && 'immersive'].filter(Boolean).join(' ')}
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('detail.content')}
+    >
       <section className="stage" aria-label={t('detail.media')} {...swipe}>
         <div className="stage-top">
           <button type="button" className="stage-btn" aria-label={t('common.close')} onClick={close}>
@@ -365,12 +429,11 @@ export function Detail() {
           </button>
         )}
       </section>
-      <aside className="panel" aria-label={t('detail.content')}>
-        <button type="button" className="sheet-handle" aria-label={t('detail.swipeHint')} aria-expanded={sheetOpen} onClick={() => setSheetOpen((o) => !o)} {...swipe}>
+      <aside ref={panel} className="panel" aria-label={t('detail.content')} style={dragging ? { top: dragTop } : undefined}>
+        <button type="button" className="sheet-handle" aria-label={t('detail.swipeHint')} aria-expanded={sheetOpen} {...handleDrag}>
           <span />
         </button>
         {post && <Panel post={post} />}
-        {!sheetOpen && <span className="swipe-hint muted small">{t('detail.swipeHint')}</span>}
       </aside>
     </div>
   )

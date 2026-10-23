@@ -1075,8 +1075,7 @@ hr {
   background: var(--panel);
   border-left: 1px solid var(--line);
 }
-.sheet-handle,
-.swipe-hint {
+.sheet-handle {
   display: none;
 }
 .author {
@@ -1650,7 +1649,14 @@ hr {
   }
   .stage {
     position: absolute;
-    inset: 0;
+    inset: 0 0 28px;
+  }
+  .detail.immersive .stage {
+    bottom: 0;
+  }
+  .detail.immersive .stage-top,
+  .detail.immersive .stage-nav {
+    display: none;
   }
   .stage-top {
     top: 6px;
@@ -1676,7 +1682,7 @@ hr {
     left: 0;
     right: 0;
     bottom: 0;
-    top: calc(100% - 150px);
+    top: calc(100% - 28px);
     width: auto;
     gap: 14px;
     padding: 8px 20px 28px;
@@ -1687,6 +1693,12 @@ hr {
     overflow: hidden;
     transition: top 0.25s ease, background 0.25s ease;
   }
+  .detail.immersive .panel {
+    top: 100%;
+  }
+  .detail.sheet-dragging .panel {
+    transition: none;
+  }
   .panel > * {
     flex-shrink: 0;
   }
@@ -1696,25 +1708,15 @@ hr {
     color: var(--text);
     overflow-y: auto;
   }
-  .detail:not(.sheet-open) .panel .post-text {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    font-size: 13px;
-  }
-  .detail:not(.sheet-open) .panel > :not(.sheet-handle, .author, .post-text, .swipe-hint) {
-    display: none;
-  }
-  .detail:not(.sheet-open) .panel .link-small {
+  .detail:not(.sheet-open) .panel > :not(.sheet-handle) {
     display: none;
   }
   .sheet-handle {
     display: grid;
     place-items: center;
     align-self: stretch;
-    height: 24px;
-    margin-bottom: -4px;
+    height: 28px;
+    margin: -8px 0 -4px;
     border: 0;
     background: none;
     cursor: pointer;
@@ -1725,11 +1727,6 @@ hr {
     height: 4px;
     border-radius: 2px;
     background: #5b6168;
-  }
-  .swipe-hint {
-    display: block;
-    margin-top: -8px;
-    color: #a3a9b0;
   }
 }
 
