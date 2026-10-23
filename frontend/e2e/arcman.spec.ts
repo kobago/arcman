@@ -200,6 +200,15 @@ test.describe('on a phone', () => {
     await expect(page.getByTestId('counter')).toHaveText('1 / 2')
   })
 
+  test('text fields are at least 16px so iOS does not zoom in on focus', async ({ page }) => {
+    await login(page)
+    await page.getByRole('button', { name: 'URLを保存' }).click()
+    await page.getByRole('button', { name: '検索' }).click()
+    const sizes = await page.locator('input:visible, textarea:visible, select:visible').evaluateAll((els) => els.map((el) => parseFloat(getComputedStyle(el).fontSize)))
+    expect(sizes.length).toBeGreaterThan(1)
+    for (const size of sizes) expect(size).toBeGreaterThanOrEqual(16)
+  })
+
   test('the collapsed sheet leaves the image uncovered and a tap hides the controls', async ({ page }) => {
     await login(page)
     const id = await savedPostId(page, '1007')
