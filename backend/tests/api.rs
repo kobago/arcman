@@ -8,7 +8,7 @@ use arcman::{AppState, Config};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{Request, StatusCode, header},
     response::IntoResponse,
     routing::get,
@@ -23,6 +23,7 @@ const PASSWORD: &str = "correct horse battery";
 #[derive(Default)]
 struct Upstream {
     statuses: HashMap<String, (u16, Value)>,
+    videos: HashMap<String, (u16, Value)>,
     missing_files: HashSet<String>,
 }
 
@@ -47,11 +48,35 @@ async fn fake_file(State(fake): State<Fake>, Path(name): Path<String>) -> impl I
     (StatusCode::OK, format!("FILE:{name}").into_bytes())
 }
 
+async fn fake_oembed(
+    State(fake): State<Fake>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    assert_eq!(q.get("format").map(String::as_str), Some("json"));
+    let id = q["url"]
+        .strip_prefix("https://www.youtube.com/watch?v=")
+        .expect("oEmbed is asked for the watch URL");
+    match fake.lock().unwrap().videos.get(id).cloned() {
+        Some((200, v)) => (StatusCode::OK, Json(v)).into_response(),
+        Some((code, _)) => StatusCode::from_u16(code).unwrap().into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn fake_thumbnail(
+    State(fake): State<Fake>,
+    Path((id, name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    fake_file(State(fake), Path(format!("{id}/{name}"))).await
+}
+
 async fn spawn_upstream() -> (String, Fake) {
     let fake = Fake::default();
     let router = Router::new()
         .route("/2/status/{id}", get(fake_status))
         .route("/files/{name}", get(fake_file))
+        .route("/oembed", get(fake_oembed))
+        .route("/vi/{id}/{name}", get(fake_thumbnail))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -83,6 +108,7 @@ impl TestApp {
         let (state, queue) = AppState::open(Config {
             home: home.path().to_path_buf(),
             fxtwitter_base_url_env: Some(env_base.unwrap_or_else(|| base.clone())),
+            youtube_oembed_url: Some(format!("{base}/oembed")),
         })
         .unwrap();
         arcman::auth::set_password(&state.db(), PASSWORD).unwrap();
@@ -152,6 +178,23 @@ impl TestApp {
             .unwrap()
             .statuses
             .insert(id.to_string(), (200, status));
+    }
+
+    fn video(&self, id: &str, title: &str) {
+        let video = json!({
+            "title": title,
+            "author_name": "Rick Astley",
+            "author_url": "https://www.youtube.com/@RickAstleyYT",
+            "type": "video",
+            "thumbnail_url": format!("{}/vi/{id}/hqdefault.jpg", self.base),
+            "thumbnail_width": 480,
+            "thumbnail_height": 360
+        });
+        self.fake
+            .lock()
+            .unwrap()
+            .videos
+            .insert(id.to_string(), (200, video));
     }
 
     fn file(&self, name: &str) -> String {
@@ -1115,4 +1158,179 @@ async fn video_tiles_and_details_carry_the_duration() {
     assert_eq!(app.tiles("").await["tiles"][0]["duration"], 24.666);
     let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
     assert_eq!(d["status"]["media"][0]["duration"], 24.666);
+}
+
+#[tokio::test]
+async fn a_youtube_video_is_saved_with_its_largest_thumbnail_as_one_tile() {
+    let app = TestApp::start().await;
+    app.video("dQw4w9WgXcQ", "Never Gonna Give You Up");
+    let id = app
+        .save("https://youtu.be/dQw4w9WgXcQ?si=share", None)
+        .await;
+
+    let tiles = app.tiles("").await["tiles"].clone();
+    assert_eq!(tiles.as_array().unwrap().len(), 1);
+    let tile = &tiles[0];
+    assert_eq!(tile["kind"], "youtube");
+    assert_eq!(tile["text"], "Never Gonna Give You Up");
+    assert_eq!(tile["author_name"], "Rick Astley");
+    assert_eq!(
+        (tile["width"].clone(), tile["height"].clone()),
+        (json!(16), json!(9))
+    );
+    assert_eq!(
+        app.call("GET", tile["src"].as_str().unwrap(), None).await.1,
+        "FILE:dQw4w9WgXcQ/maxresdefault.jpg"
+    );
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["source"], "youtube");
+    assert!(d["status"].is_null());
+    assert_eq!(
+        d["video"],
+        json!({
+            "id": "dQw4w9WgXcQ",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "shorts": false,
+            "title": "Never Gonna Give You Up",
+            "channel": {"name": "Rick Astley", "url": "https://www.youtube.com/@RickAstleyYT"},
+            "thumbnail": tile["src"]
+        })
+    );
+
+    let (_, authors) = app.call("GET", "/api/authors", None).await;
+    assert_eq!(authors[0]["screen_name"], "RickAstleyYT");
+    assert_eq!(app.tile_post_ids("q=gonna").await, vec![id]);
+}
+
+#[tokio::test]
+async fn a_video_without_a_large_thumbnail_falls_back_to_the_oembed_one() {
+    let app = TestApp::start().await;
+    app.video("W8VZmVf4d4M", "a short");
+    app.fake
+        .lock()
+        .unwrap()
+        .missing_files
+        .insert("W8VZmVf4d4M/maxresdefault.jpg".into());
+    let id = app
+        .save("https://www.youtube.com/shorts/W8VZmVf4d4M", None)
+        .await;
+
+    let tile = app.tiles("").await["tiles"][0].clone();
+    assert_eq!(
+        (tile["width"].clone(), tile["height"].clone()),
+        (json!(9), json!(16))
+    );
+    assert_eq!(
+        app.call("GET", tile["src"].as_str().unwrap(), None).await.1,
+        "FILE:W8VZmVf4d4M/hqdefault.jpg"
+    );
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["video"]["shorts"], true);
+    assert_eq!(
+        d["video"]["url"],
+        "https://www.youtube.com/shorts/W8VZmVf4d4M"
+    );
+}
+
+#[tokio::test]
+async fn the_same_video_from_another_url_form_points_to_the_existing_one() {
+    let app = TestApp::start().await;
+    app.video("dQw4w9WgXcQ", "once");
+    let id = app
+        .save("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None)
+        .await;
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://youtu.be/dQw4w9WgXcQ", "https://m.youtube.com/watch?v=dQw4w9WgXcQ&t=1"] })),
+        )
+        .await;
+    assert_eq!(
+        v[0],
+        json!({"url": "https://youtu.be/dQw4w9WgXcQ", "outcome": "duplicate", "post_id": id})
+    );
+    assert_eq!(v[1]["outcome"], "duplicate");
+}
+
+#[tokio::test]
+async fn missing_or_private_videos_are_rejected_without_being_saved() {
+    let app = TestApp::start().await;
+    app.fake
+        .lock()
+        .unwrap()
+        .videos
+        .insert("privatevid1".into(), (401, Value::Null));
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(
+                json!({ "urls": ["https://youtu.be/missingvid1", "https://youtu.be/privatevid1"] }),
+            ),
+        )
+        .await;
+    assert_eq!(v[0]["reason"], "not_found");
+    assert_eq!(v[1]["reason"], "private");
+    assert!(app.tiles("").await["tiles"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_unreachable_oembed_leaves_a_failed_video_that_can_be_retried() {
+    let app = TestApp::start().await;
+    app.fake
+        .lock()
+        .unwrap()
+        .videos
+        .insert("dQw4w9WgXcQ".into(), (503, Value::Null));
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://youtu.be/dQw4w9WgXcQ"] })),
+        )
+        .await;
+    let id = v[0]["post_id"].as_i64().unwrap();
+    assert_eq!(app.tiles("").await["tiles"][0]["kind"], "failed");
+
+    app.video("dQw4w9WgXcQ", "back");
+    let (s, _) = app
+        .call("POST", &format!("/api/posts/{id}/retry"), None)
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    assert_eq!(app.wait_until_settled(id).await["video"]["title"], "back");
+}
+
+#[tokio::test]
+async fn youtube_videos_have_their_own_media_type() {
+    let app = TestApp::start().await;
+    app.upstream("150", app.with_photos(app.status("150", "photo"), 1));
+    app.upstream("151", app.status("151", "text"));
+    app.video("dQw4w9WgXcQ", "video");
+    let photo = app.save("https://x.com/a/status/150", None).await;
+    let text = app.save("https://x.com/a/status/151", None).await;
+    let video = app.save("https://youtu.be/dQw4w9WgXcQ", None).await;
+
+    assert_eq!(app.tile_post_ids("media=youtube").await, vec![video]);
+    assert_eq!(app.tile_post_ids("media=photo").await, vec![photo]);
+    assert_eq!(app.tile_post_ids("media=video").await, Vec::<i64>::new());
+    assert_eq!(app.tile_post_ids("media=text").await, vec![text]);
+}
+
+#[tokio::test]
+#[ignore = "hits the real YouTube oEmbed endpoint and thumbnail servers"]
+async fn live_youtube_video_is_saved_with_its_thumbnail() {
+    let (_, fake) = spawn_upstream().await;
+    // `{base}/oembed` is YouTube's real endpoint.
+    let base = "https://www.youtube.com".to_string();
+    let app = TestApp::start_with(base, fake, TempDir::new().unwrap(), None).await;
+    let id = app
+        .save("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None)
+        .await;
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["state"], "done", "{d}");
+    assert_eq!(d["video"]["channel"]["name"], "Rick Astley");
+    let file = app.state.media_dir.join(id.to_string()).join("main-0.jpg");
+    assert!(std::fs::metadata(&file).unwrap().len() > 10_000);
 }

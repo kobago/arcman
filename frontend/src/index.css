@@ -913,6 +913,16 @@ hr {
   color: #fff;
   font: 11.5px var(--mono);
 }
+.tile-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 18px 10px 8px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  color: #fff;
+  font-size: 12px;
+}
 .tile-text {
   position: absolute;
   inset: 0;
@@ -1068,6 +1078,18 @@ hr {
   object-fit: contain;
   -webkit-user-drag: none;
 }
+.slide:has(.stage-player) {
+  container-type: size;
+}
+.stage-player {
+  width: min(100cqw, 100cqh * 16 / 9);
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+.stage-player.shorts {
+  width: min(100cqw, 100cqh * 9 / 16);
+  aspect-ratio: 9 / 16;
+}
 .stage-message {
   display: flex;
   flex-direction: column;
@@ -1120,6 +1142,10 @@ hr {
   display: flex;
   flex-direction: column;
   line-height: 1.4;
+}
+.author-names a {
+  color: inherit;
+  text-decoration: none;
 }
 .link-small {
   display: inline-flex;

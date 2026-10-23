@@ -1,4 +1,4 @@
-export type MediaFilter = '' | 'photo' | 'video' | 'text'
+export type MediaFilter = '' | 'photo' | 'video' | 'youtube' | 'text'
 
 export type Filters = {
   folder: string
@@ -11,7 +11,7 @@ export type Filters = {
   order: 'desc' | 'asc'
 }
 
-const MEDIA: MediaFilter[] = ['photo', 'video', 'text']
+const MEDIA: MediaFilter[] = ['photo', 'video', 'youtube', 'text']
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 
 export function parseFilters(sp: URLSearchParams): Filters {

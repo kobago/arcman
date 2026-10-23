@@ -43,7 +43,7 @@ test('saving several URLs reports each line and shows one tile per image', async
 
   const toast = page.getByRole('status')
   await expect(toast).toContainText('1件を保存しました')
-  await expect(toast).toContainText('x.com の投稿URLではありません')
+  await expect(toast).toContainText('x.com の投稿や YouTube の動画のURLではありません')
   await expect(toast.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
 
   await expect(page.getByRole('link', { name: '投稿を開く (1/2)' }).first()).toBeVisible()
@@ -166,6 +166,27 @@ test('tags are added in the detail panel, filter the gallery, and can be renamed
   await page.getByLabel('新しいタグ名').fill('Kittens')
   await page.getByRole('button', { name: '保存' }).click()
   await expect(page.getByRole('row', { name: /Kittens/ })).toBeVisible()
+})
+
+test('a YouTube link is saved as a video tile that plays in the detail view', async ({ page }) => {
+  await page.route('https://www.youtube-nocookie.com/**', (route) => route.fulfill({ body: '' }))
+  await login(page)
+  await save(page, 'https://youtu.be/dQw4w9WgXcQ?si=share')
+  await expect(page.getByRole('status')).toContainText('1件を保存しました')
+
+  const tile = page.locator('a[data-testid="tile"].youtube')
+  await expect(tile).toContainText('港町を歩く動画')
+  await tile.click()
+  await expect(page.locator('iframe.stage-player')).toHaveAttribute('src', /youtube-nocookie\.com\/embed\/dQw4w9WgXcQ\?/)
+  const panel = page.getByRole('complementary', { name: '投稿の内容' })
+  await expect(panel).toContainText('Harbor Walks')
+  await expect(panel.getByRole('link', { name: 'YouTube で開く' })).toHaveAttribute('href', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '種類' }).click()
+  await page.getByRole('radio', { name: 'YouTube' }).click()
+  await expect(page).toHaveURL(/media=youtube/)
+  await expect(page.locator('a[data-testid="tile"]')).toHaveCount(1)
 })
 
 test.describe('on a phone', () => {

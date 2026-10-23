@@ -7,6 +7,7 @@ pub mod organize;
 pub mod posts;
 pub mod settings;
 pub mod tags;
+pub mod youtube;
 
 use std::{
     path::PathBuf,
@@ -27,6 +28,7 @@ use tower_http::services::ServeDir;
 pub struct Config {
     pub home: PathBuf,
     pub fxtwitter_base_url_env: Option<String>,
+    pub youtube_oembed_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -34,6 +36,7 @@ pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub media_dir: PathBuf,
     pub fxtwitter_base_url_env: Option<Arc<str>>,
+    pub youtube_oembed_url: Arc<str>,
     pub http: reqwest::Client,
     pub archive_queue: mpsc::UnboundedSender<i64>,
     pub login_guard: Arc<Mutex<auth::LoginGuard>>,
@@ -50,6 +53,10 @@ impl AppState {
             db: Arc::new(Mutex::new(conn)),
             media_dir,
             fxtwitter_base_url_env: config.fxtwitter_base_url_env.map(Into::into),
+            youtube_oembed_url: config
+                .youtube_oembed_url
+                .unwrap_or_else(|| youtube::DEFAULT_OEMBED_URL.into())
+                .into(),
             http: reqwest::Client::builder()
                 .user_agent(concat!("arcman/", env!("CARGO_PKG_VERSION")))
                 .connect_timeout(std::time::Duration::from_secs(10))

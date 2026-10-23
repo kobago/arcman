@@ -11,6 +11,7 @@ describe('parseFilters / writeFilters', () => {
   it('round-trips every filter through the URL', () => {
     const f: Filters = { folder: '3', q: '猫', tags: [1, 2], from: '2026-09-01', to: '2026-09-30', media: 'photo', author: 'alice', order: 'asc' }
     expect(parseFilters(writeFilters(f))).toEqual(f)
+    expect(parseFilters(new URLSearchParams('media=youtube')).media).toBe('youtube')
   })
 
   it('leaves defaults out of the URL', () => {

@@ -47,6 +47,16 @@ const statuses: Record<string, unknown> = {
   }),
 }
 
+const videos: Record<string, unknown> = {
+  dQw4w9WgXcQ: {
+    title: '港町を歩く動画',
+    author_name: 'Harbor Walks',
+    author_url: 'https://www.youtube.com/@harborwalks',
+    type: 'video',
+    thumbnail_url: `${base}/vi/dQw4w9WgXcQ/hqdefault.jpg`,
+  },
+}
+
 Bun.serve({
   port: PORT,
   hostname: '127.0.0.1',
@@ -58,7 +68,12 @@ Bun.serve({
       const found = statuses[statusMatch[1]]
       return Response.json({ code: found ? 200 : 404, status: found ?? null }, { status: found ? 200 : 404 })
     }
-    if (pathname.startsWith('/files/')) {
+    if (pathname === '/oembed') {
+      const watch = new URL(new URL(req.url).searchParams.get('url') ?? '')
+      const found = videos[watch.searchParams.get('v') ?? '']
+      return found ? Response.json(found) : new Response('Not Found', { status: 404 })
+    }
+    if (pathname.startsWith('/files/') || pathname.startsWith('/vi/')) {
       const isVideo = pathname.endsWith('.mp4')
       return new Response(isVideo ? new Uint8Array(64) : png, { headers: { 'Content-Type': isVideo ? 'video/mp4' : 'image/png' } })
     }

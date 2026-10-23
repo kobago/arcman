@@ -13,7 +13,7 @@ use crate::{
     AppState,
     error::{ApiError, ApiResult},
     fxtwitter::{self, Card, FetchError, Note, Status, Translation},
-    settings, tags,
+    settings, tags, youtube,
 };
 
 pub fn remove_media_dir(state: &AppState, post_id: i64) {
@@ -38,24 +38,87 @@ fn ensure_folder(conn: &Connection, id: Option<i64>) -> ApiResult<()> {
     Ok(())
 }
 
-fn store_snapshot(
-    conn: &Connection,
-    post_id: i64,
-    raw: &Value,
-    status: &Status,
-) -> rusqlite::Result<()> {
+/// A saved URL, by the site it points to.
+enum Target {
+    X(String),
+    Youtube(youtube::Video),
+}
+
+impl Target {
+    fn parse(url: &str) -> Option<Self> {
+        fxtwitter::parse_status_id(url)
+            .map(Self::X)
+            .or_else(|| youtube::parse_video(url).map(Self::Youtube))
+    }
+
+    fn source(&self) -> &'static str {
+        match self {
+            Self::X(_) => "x",
+            Self::Youtube(_) => "youtube",
+        }
+    }
+
+    fn status_id(&self) -> &str {
+        match self {
+            Self::X(id) => id,
+            Self::Youtube(v) => &v.id,
+        }
+    }
+}
+
+/// The upstream response and the columns taken out of it.
+struct Snapshot {
+    raw: Value,
+    author_screen_name: String,
+    author_name: String,
+    text: String,
+    lang: Option<String>,
+    posted_at: Option<i64>,
+}
+
+async fn fetch_snapshot(
+    state: &AppState,
+    source: &str,
+    status_id: &str,
+) -> Result<Snapshot, FetchError> {
+    if source == "youtube" {
+        let (raw, video) =
+            youtube::fetch(&state.http, &state.youtube_oembed_url, status_id).await?;
+        return Ok(Snapshot {
+            raw,
+            author_screen_name: video.channel_id(),
+            author_name: video.author_name,
+            text: video.title,
+            lang: None,
+            posted_at: None,
+        });
+    }
+    let base =
+        settings::fxtwitter_base_url(state).map_err(|e| FetchError::Transport(e.to_string()))?;
+    let (raw, status) = fxtwitter::fetch(&state.http, &base, status_id).await?;
+    Ok(Snapshot {
+        raw,
+        author_screen_name: status.author.screen_name,
+        author_name: status.author.name,
+        text: status.text,
+        lang: status.lang,
+        posted_at: status.created_timestamp,
+    })
+}
+
+fn store_snapshot(conn: &Connection, post_id: i64, s: &Snapshot) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE posts SET author_screen_name = ?1, author_name = ?2, text = ?3, lang = ?4,
              posted_at = strftime('%Y-%m-%dT%H:%M:%SZ', ?5, 'unixepoch'),
              snapshot = ?6, state = 'pending', failure = NULL
          WHERE id = ?7",
         params![
-            status.author.screen_name,
-            status.author.name,
-            status.text,
-            status.lang,
-            status.created_timestamp,
-            raw.to_string(),
+            s.author_screen_name,
+            s.author_name,
+            s.text,
+            s.lang,
+            s.posted_at,
+            s.raw.to_string(),
             post_id
         ],
     )?;
@@ -83,7 +146,6 @@ pub async fn create(
     Json(input): Json<NewPosts>,
 ) -> ApiResult<Json<Vec<SaveResult>>> {
     ensure_folder(&state.db(), input.folder_id)?;
-    let base = settings::fxtwitter_base_url(&state)?;
     let mut results = vec![];
     for url in input
         .urls
@@ -97,15 +159,16 @@ pub async fn create(
             post_id,
             reason,
         };
-        let Some(status_id) = fxtwitter::parse_status_id(url) else {
+        let Some(target) = Target::parse(url) else {
             results.push(result("invalid_url", None, None));
             continue;
         };
+        let status_id = target.status_id();
         let existing: Option<i64> = state
             .db()
             .query_row(
                 "SELECT id FROM posts WHERE status_id = ?1",
-                [&status_id],
+                [status_id],
                 |r| r.get(0),
             )
             .optional()?;
@@ -113,7 +176,7 @@ pub async fn create(
             results.push(result("duplicate", Some(id), None));
             continue;
         }
-        let fetched = fxtwitter::fetch(&state.http, &base, &status_id).await;
+        let fetched = fetch_snapshot(&state, target.source(), status_id).await;
         if let Err(FetchError::Unavailable(reason)) = fetched {
             results.push(result("unavailable", None, Some(reason)));
             continue;
@@ -121,13 +184,13 @@ pub async fn create(
         let post_id = {
             let db = state.db();
             let inserted = db.execute(
-                "INSERT INTO posts (status_id, source_url, state, failure, folder_id)
-                 VALUES (?1, ?2, 'failed', 'api_unavailable', ?3) ON CONFLICT (status_id) DO NOTHING",
-                params![status_id, url, input.folder_id],
+                "INSERT INTO posts (source, status_id, source_url, state, failure, folder_id)
+                 VALUES (?1, ?2, ?3, 'failed', 'api_unavailable', ?4) ON CONFLICT (status_id) DO NOTHING",
+                params![target.source(), status_id, url, input.folder_id],
             )?;
             let id: i64 = db.query_row(
                 "SELECT id FROM posts WHERE status_id = ?1",
-                [&status_id],
+                [status_id],
                 |r| r.get(0),
             )?;
             if inserted == 0 {
@@ -135,7 +198,7 @@ pub async fn create(
                 continue;
             }
             match &fetched {
-                Ok((raw, status)) => store_snapshot(&db, id, raw, status)?,
+                Ok(snapshot) => store_snapshot(&db, id, snapshot)?,
                 Err(e) => eprintln!("fetch {status_id}: {e:?}"),
             }
             id
@@ -149,11 +212,12 @@ pub async fn create(
 }
 
 pub async fn retry(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
-    let (status_id, post_state, has_snapshot): (String, String, bool) = state.db().query_row(
-        "SELECT status_id, state, snapshot IS NOT NULL FROM posts WHERE id = ?1",
-        [id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
+    let (source, status_id, post_state, has_snapshot): (String, String, String, bool) =
+        state.db().query_row(
+            "SELECT source, status_id, state, snapshot IS NOT NULL FROM posts WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
     if post_state != "failed" {
         return Err(ApiError::Conflict("not_failed"));
     }
@@ -163,9 +227,8 @@ pub async fn retry(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRes
             [id],
         )?;
     } else {
-        let base = settings::fxtwitter_base_url(&state)?;
-        match fxtwitter::fetch(&state.http, &base, &status_id).await {
-            Ok((raw, status)) => store_snapshot(&state.db(), id, &raw, &status)?,
+        match fetch_snapshot(&state, &source, &status_id).await {
+            Ok(snapshot) => store_snapshot(&state.db(), id, &snapshot)?,
             Err(FetchError::Unavailable(reason)) => return Err(ApiError::Unprocessable(reason)),
             Err(FetchError::Transport(e)) => {
                 eprintln!("fetch {status_id}: {e}");
@@ -280,12 +343,18 @@ pub async fn tiles(
         }
     }
     let media_kinds: Option<&[&str]> = match q.media.as_deref() {
-        None => None,
+        None | Some("youtube") => None,
         Some("photo") => Some(&["photo"]),
         Some("video") => Some(&["video", "gif"]),
         Some("text") => Some(&[]),
         Some(_) => return Err(ApiError::BadRequest("invalid_media")),
     };
+    // The other media types are about X posts; a YouTube video is its own type.
+    if q.media.as_deref() == Some("youtube") {
+        wh.push(format!("p.source = 'youtube' AND EXISTS ({MAIN_MEDIA_OF})"));
+    } else if media_kinds.is_some() {
+        wh.push("p.source = 'x'".into());
+    }
     match media_kinds {
         Some([]) => wh.push(format!("p.state = 'done' AND NOT EXISTS ({MAIN_MEDIA_OF})")),
         Some(kinds) => wh.push(format!(
@@ -326,6 +395,7 @@ pub async fn tiles(
     let db = state.db();
     struct Row {
         id: i64,
+        source: String,
         url: String,
         saved_at: String,
         state: String,
@@ -336,19 +406,20 @@ pub async fn tiles(
     }
     let mut rows: Vec<Row> = db
         .prepare(&format!(
-            "SELECT p.id, p.source_url, p.saved_at, p.state, p.failure, p.text, p.author_name, p.author_screen_name
+            "SELECT p.id, p.source, p.source_url, p.saved_at, p.state, p.failure, p.text, p.author_name, p.author_screen_name
              FROM posts p {where_sql} ORDER BY p.saved_at {dir}, p.id {dir} LIMIT ?"
         ))?
         .query_map(params_from_iter(args), |r| {
             Ok(Row {
                 id: r.get(0)?,
-                url: r.get(1)?,
-                saved_at: r.get(2)?,
-                state: r.get(3)?,
-                failure: r.get(4)?,
-                text: r.get(5)?,
-                author_name: r.get(6)?,
-                author_screen_name: r.get(7)?,
+                source: r.get(1)?,
+                url: r.get(2)?,
+                saved_at: r.get(3)?,
+                state: r.get(4)?,
+                failure: r.get(5)?,
+                text: r.get(6)?,
+                author_name: r.get(7)?,
+                author_screen_name: r.get(8)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -412,6 +483,15 @@ pub async fn tiles(
                     author_name: Some(row.author_name.clone()),
                     author_screen_name: Some(row.author_screen_name.clone()),
                     ..base("text")
+                }),
+                Some(items) if row.source == "youtube" => tiles.push(Tile {
+                    src: Some(media_url(row.id, &items[0].file)),
+                    width: items[0].width,
+                    height: items[0].height,
+                    text: Some(row.text.clone()),
+                    author_name: Some(row.author_name.clone()),
+                    author_screen_name: Some(row.author_screen_name.clone()),
+                    ..base("youtube")
                 }),
                 Some(items) => {
                     for (i, m) in items.iter().enumerate() {
@@ -520,8 +600,25 @@ pub struct StatusView {
 }
 
 #[derive(Serialize)]
+pub struct ChannelView {
+    name: String,
+    url: String,
+}
+
+#[derive(Serialize)]
+pub struct VideoView {
+    id: String,
+    url: String,
+    shorts: bool,
+    title: String,
+    channel: ChannelView,
+    thumbnail: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct Detail {
     id: i64,
+    source: String,
     status_id: String,
     url: String,
     state: String,
@@ -530,6 +627,8 @@ pub struct Detail {
     saved_at: String,
     tags: Vec<TagRef>,
     status: Option<StatusView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    video: Option<VideoView>,
 }
 
 struct MediaRow {
@@ -644,20 +743,27 @@ fn status_view(s: &Status, local: &LocalMedia, quote: bool) -> StatusView {
 
 pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Detail>> {
     let db = state.db();
-    let (status_id, url, post_state, failure, folder_id, saved_at, snapshot): (
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<i64>,
-        String,
-        Option<String>,
-    ) = db.query_row(
-        "SELECT status_id, source_url, state, failure, folder_id, saved_at, snapshot FROM posts WHERE id = ?1",
+    let (mut detail, snapshot) = db.query_row(
+        "SELECT source, status_id, source_url, state, failure, folder_id, saved_at, snapshot FROM posts WHERE id = ?1",
         [id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        |r| {
+            let detail = Detail {
+                id,
+                source: r.get(0)?,
+                status_id: r.get(1)?,
+                url: r.get(2)?,
+                state: r.get(3)?,
+                failure: r.get(4)?,
+                folder_id: r.get(5)?,
+                saved_at: r.get(6)?,
+                tags: vec![],
+                status: None,
+                video: None,
+            };
+            Ok((detail, r.get::<_, Option<String>>(7)?))
+        },
     )?;
-    let tags = db
+    detail.tags = db
         .prepare(
             "SELECT t.id, t.name, t.color FROM tags t JOIN post_tags pt ON pt.tag_id = t.id
              WHERE pt.post_id = ?1 ORDER BY t.key",
@@ -689,20 +795,34 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
         })?
         .collect::<Result<_, _>>()?;
     let local = LocalMedia { post_id: id, rows };
-    let status = snapshot
-        .and_then(|s| serde_json::from_str::<Status>(&s).ok())
-        .map(|s| status_view(&s, &local, false));
-    Ok(Json(Detail {
-        id,
-        status_id,
-        url,
-        state: post_state,
-        failure,
-        folder_id,
-        saved_at,
-        tags,
-        status,
-    }))
+    match detail.source.as_str() {
+        "youtube" => {
+            let shorts = youtube::parse_video(&detail.url).is_some_and(|v| v.shorts);
+            let video = youtube::Video {
+                id: detail.status_id.clone(),
+                shorts,
+            };
+            detail.video = snapshot
+                .and_then(|s| serde_json::from_str::<youtube::Oembed>(&s).ok())
+                .map(|o| VideoView {
+                    url: video.url(),
+                    id: video.id,
+                    shorts,
+                    title: o.title,
+                    channel: ChannelView {
+                        name: o.author_name,
+                        url: o.author_url,
+                    },
+                    thumbnail: local.first("main"),
+                });
+        }
+        _ => {
+            detail.status = snapshot
+                .and_then(|s| serde_json::from_str::<Status>(&s).ok())
+                .map(|s| status_view(&s, &local, false));
+        }
+    }
+    Ok(Json(detail))
 }
 
 #[derive(Deserialize)]

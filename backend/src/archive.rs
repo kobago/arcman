@@ -11,6 +11,7 @@ use tokio::{io::AsyncWriteExt, sync::mpsc};
 use crate::{
     AppState,
     fxtwitter::{MediaItem, Status},
+    youtube,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +20,8 @@ pub struct Download {
     pub position: i64,
     pub kind: &'static str,
     pub url: String,
+    /// Tried when `url` cannot be downloaded.
+    pub fallback_url: Option<String>,
     pub thumbnail_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -32,6 +35,7 @@ impl Download {
             position,
             kind: "photo",
             url: url.to_string(),
+            fallback_url: None,
             thumbnail_url: None,
             width: None,
             height: None,
@@ -101,6 +105,7 @@ fn media_downloads(role: &'static str, items: &[MediaItem]) -> Vec<Download> {
             } else {
                 m.best_mp4().to_string()
             },
+            fallback_url: None,
             thumbnail_url: m.thumbnail_url.clone().filter(|_| kind != "photo"),
             width: m.width,
             height: m.height,
@@ -228,22 +233,27 @@ async fn download(state: &AppState, post_id: i64, url: &str, dest: &Path) -> Res
 }
 
 async fn archive_post(state: &AppState, post_id: i64) {
-    let snapshot: Option<String> = match state
+    let (source, source_url, snapshot): (String, String, Option<String>) = match state
         .db()
         .query_row(
-            "SELECT snapshot FROM posts WHERE id = ?1 AND state = 'pending'",
+            "SELECT source, source_url, snapshot FROM posts WHERE id = ?1 AND state = 'pending'",
             [post_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
     {
-        Ok(Some(s)) => s,
+        Ok(Some(row)) => row,
         Ok(None) => return,
         Err(e) => return eprintln!("archive {post_id}: {e}"),
     };
-    let downloads = snapshot
-        .and_then(|s| serde_json::from_str::<Status>(&s).ok())
-        .map(|s| plan(&s));
+    let downloads = snapshot.and_then(|s| match source.as_str() {
+        "youtube" => {
+            let shorts = youtube::parse_video(&source_url).is_some_and(|v| v.shorts);
+            let oembed = serde_json::from_str::<youtube::Oembed>(&s).ok()?;
+            Some(youtube::plan(&oembed, shorts))
+        }
+        _ => serde_json::from_str::<Status>(&s).ok().map(|s| plan(&s)),
+    });
     let Some(downloads) = downloads else {
         return finish(state, post_id, Err("snapshot_missing".into()), &[]);
     };
@@ -263,6 +273,10 @@ async fn archive_post(state: &AppState, post_id: i64) {
             break;
         }
         result = download(state, post_id, &d.url, &dir.join(d.file_name())).await;
+        if let (Err(e), Some(fallback)) = (&result, &d.fallback_url) {
+            eprintln!("archive {post_id}: {e}; trying {fallback}");
+            result = download(state, post_id, fallback, &dir.join(d.file_name())).await;
+        }
         if let (Ok(()), Some(thumb), Some(name)) = (&result, &d.thumbnail_url, d.thumbnail_name()) {
             result = download(state, post_id, thumb, &dir.join(name)).await;
         }

@@ -55,6 +55,16 @@ function TileBody({ tile }: { tile: Tile }) {
           </span>
         </>
       )
+    case 'youtube':
+      return (
+        <>
+          <img src={tile.src} alt="" loading="lazy" decoding="async" />
+          <span className="badge">
+            <Icon name="youtube" size={14} strokeWidth={2} />
+          </span>
+          <span className="tile-caption ellipsis">{tile.text}</span>
+        </>
+      )
     case 'text':
       return (
         <div className="tile-text">

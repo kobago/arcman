@@ -18,7 +18,8 @@ commands:
 environment:
   ARCMAN_HOME                 data directory (default ~/.arcman)
   ARCMAN_ADDR                 listen address when --addr is not given
-  ARCMAN_FXTWITTER_BASE_URL   initial fxtwitter API base URL";
+  ARCMAN_FXTWITTER_BASE_URL   initial fxtwitter API base URL
+  ARCMAN_YOUTUBE_OEMBED_URL   YouTube oEmbed endpoint (for tests)";
 
 fn config() -> BoxResult<Config> {
     let home = match env::var_os("ARCMAN_HOME") {
@@ -28,6 +29,9 @@ fn config() -> BoxResult<Config> {
     Ok(Config {
         home,
         fxtwitter_base_url_env: env::var("ARCMAN_FXTWITTER_BASE_URL")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        youtube_oembed_url: env::var("ARCMAN_YOUTUBE_OEMBED_URL")
             .ok()
             .filter(|s| !s.is_empty()),
     })

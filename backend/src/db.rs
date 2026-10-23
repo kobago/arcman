@@ -71,7 +71,11 @@ CREATE TABLE sessions (
 );
 ";
 
-const MIGRATIONS: &[&str] = &["ALTER TABLE media ADD COLUMN duration REAL;"];
+const MIGRATIONS: &[&str] = &[
+    "ALTER TABLE media ADD COLUMN duration REAL;",
+    // A YouTube video id (11 characters) never looks like an X status id, so status_id stays unique on its own.
+    "ALTER TABLE posts ADD COLUMN source TEXT NOT NULL DEFAULT 'x' CHECK (source IN ('x', 'youtube'));",
+];
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -111,6 +115,8 @@ mod tests {
             .unwrap();
         assert_eq!(version as usize, MIGRATIONS.len() + 1);
         conn.execute("UPDATE media SET duration = 1.5", []).unwrap();
+        conn.execute("UPDATE posts SET source = 'youtube'", [])
+            .unwrap();
         let name: String = conn
             .query_row("SELECT name FROM categories", [], |r| r.get(0))
             .unwrap();

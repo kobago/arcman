@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router'
-import { api, type MediaView, type PostDetail, type StatusView, type Tile } from '../api'
+import { api, type MediaView, type PostDetail, type StatusView, type Tile, type VideoView } from '../api'
 import { formatCount, formatDateTime, swipeDirection } from '../format'
 import { errorMessage, useI18n } from '../i18n'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -26,10 +26,42 @@ function Media({ media }: { media: MediaView }) {
 }
 
 function TilePreview({ tile }: { tile: Tile }) {
-  if (tile.kind === 'photo') return <img className="stage-media" src={tile.src} alt="" draggable={false} />
+  if (tile.kind === 'photo' || tile.kind === 'youtube') return <img className="stage-media" src={tile.src} alt="" draggable={false} />
   if (tile.kind === 'video' || tile.kind === 'gif') return <img className="stage-media" src={tile.thumbnail} alt="" draggable={false} />
   if (tile.kind === 'text') return <div className="stage-text">{tile.text}</div>
   return null
+}
+
+function YoutubePlayer({ video }: { video: VideoView }) {
+  return (
+    <iframe
+      key={video.id}
+      className={video.shorts ? 'stage-player shorts' : 'stage-player'}
+      src={`https://www.youtube-nocookie.com/embed/${video.id}?autoplay=1&playsinline=1&rel=0`}
+      title={video.title}
+      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+      allowFullScreen
+    />
+  )
+}
+
+function VideoInfo({ video }: { video: VideoView }) {
+  const { t } = useI18n()
+  return (
+    <>
+      <div className="author">
+        <div className="author-names">
+          <a className="strong ellipsis" href={video.channel.url} target="_blank" rel="noreferrer">
+            {video.channel.name}
+          </a>
+        </div>
+        <a href={video.url} target="_blank" rel="noreferrer" className="link-small">
+          {t('detail.openOnYoutube')} <Icon name="external" size={13} strokeWidth={2} />
+        </a>
+      </div>
+      <p className="post-text">{video.title}</p>
+    </>
+  )
 }
 
 function Status({ status, nested }: { status: StatusView; nested?: boolean }) {
@@ -162,6 +194,7 @@ function Panel({ post }: { post: PostDetail }) {
   return (
     <>
       {post.status && <Status status={post.status} />}
+      {post.video && <VideoInfo video={post.video} />}
       <dl className="dates">
         {post.status?.posted_at && (
           <>
@@ -506,6 +539,8 @@ export function Detail() {
                 )}
                 {retry.error && <p className="form-error">{errorMessage(t, retry.error)}</p>}
               </div>
+            ) : post.video ? (
+              <YoutubePlayer video={post.video} />
             ) : current ? (
               <Media media={current} />
             ) : (

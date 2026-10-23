@@ -50,6 +50,7 @@ export function FilterBar({ filters, onChange, title, trailing }: Props) {
   const mediaLabel: Record<Exclude<MediaFilter, ''>, string> = {
     photo: t('filter.media.photo'),
     video: t('filter.media.video'),
+    youtube: t('filter.media.youtube'),
     text: t('filter.media.text'),
   }
   const key = normalizeTagKey(tagQuery)
@@ -116,7 +117,7 @@ export function FilterBar({ filters, onChange, title, trailing }: Props) {
 
       <Dropdown label={t('filter.media')} open={open === 'media'} onToggle={toggle('media')}>
         <div className="option-list" role="radiogroup" aria-label={t('filter.media')}>
-          {(['', 'photo', 'video', 'text'] as MediaFilter[]).map((m) => (
+          {(['', 'photo', 'video', 'youtube', 'text'] as MediaFilter[]).map((m) => (
             <label key={m || 'any'} className="option">
               <input type="radio" name="media" checked={filters.media === m} onChange={() => (set({ media: m }), setOpen(null))} />
               {m ? mediaLabel[m] : t('filter.media.any')}

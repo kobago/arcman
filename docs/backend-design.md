@@ -27,6 +27,7 @@
 | `error.rs` | API エラー（HTTP ステータスとエラーコード） |
 | `auth.rs` | パスワード、セッション、ログイン失敗の制限、認証ミドルウェア |
 | `fxtwitter.rs` | URL から投稿IDを取り出す、API 呼び出し、レスポンスの型 |
+| `youtube.rs` | URL から動画IDを取り出す、oEmbed の呼び出し、サムネイルのダウンロード計画 |
 | `archive.rs` | メディアのダウンロード計画と、1件ずつ処理するワーカー |
 | `posts.rs` | 投稿の保存、タイル、詳細、削除、再試行、フォルダの移動、タグの付け替え |
 | `organize.rs` | カテゴリとフォルダ |
@@ -40,6 +41,7 @@
 | `ARCMAN_HOME` | `~/.arcman` | データと設定の置き場所 |
 | `ARCMAN_ADDR` | `127.0.0.1:3000` | 待ち受けアドレス。`--addr` が優先 |
 | `ARCMAN_FXTWITTER_BASE_URL` | `https://api.fxtwitter.com` | 設定画面の初期値。画面で保存した値が優先 |
+| `ARCMAN_YOUTUBE_OEMBED_URL` | `https://www.youtube.com/oembed` | テスト用。設定画面には出さない |
 
 ```
 arcman serve [--addr HOST:PORT]   サーバーを起動する（例: Tailscale 越しなら --addr 0.0.0.0:3000）
@@ -88,7 +90,7 @@ arcman set-password               パスワードを設定する（端末なら2
 | `q` | 本文とタグ名の部分一致 |
 | `tags` | タグ ID のカンマ区切り（AND） |
 | `from`、`to` | 保存日時の範囲（ISO 8601。`to` は含まない） |
-| `media` | `photo`、`video`（GIF を含む）、`text` |
+| `media` | `photo`、`video`（GIF を含む）、`text`（ここまでは x.com の投稿だけ）、`youtube` |
 | `author` | 投稿者のスクリーンネーム |
 | `order` | `desc`（既定）、`asc` |
 
@@ -138,11 +140,13 @@ arcman set-password               パスワードを設定する（端末なら2
    - X記事は、`article` の中にある `pbs.twimg.com` の画像 URL をすべて保存する
 4. すべて保存できたら完了、1つでも失敗したら失敗にする。起動時に取得中の投稿をワーカーに渡し直す
 
+YouTube の動画は、2 の代わりに `GET https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v={id}` を呼ぶ。`400` と `404` は `not_found`、`401` と `403` は `private` として保存しない（埋め込みを禁止した動画も `401` になるので保存できない）。ワーカーはサムネイルだけを保存する。`maxresdefault.jpg` を試し、なければ oEmbed の `thumbnail_url`（`hqdefault.jpg`）にする。サムネイルは 4:3 に黒帯を足した画像のことがあるので、タイルの縦横比は 16:9（ショートは 9:16）にして切り抜く
+
 ファイルは `media/{post_id}/{role}-{position}.{ext}` に `.part` で書いてから名前を変える。
 
 ## 5. 詳細のレスポンス
 
-スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
+スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。YouTube の動画は `status` の代わりに `video`（ID、URL、ショートか、タイトル、チャンネル、サムネイル）を返す。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
 
 ## 6. SPA の配信
 
