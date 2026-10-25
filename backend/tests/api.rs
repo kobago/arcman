@@ -26,6 +26,11 @@ struct Upstream {
     videos: HashMap<String, (u16, Value)>,
     /// Web pages by name: status, content type and body.
     pages: HashMap<String, (u16, &'static str, String)>,
+    /// pixiv artworks by id: the ajax status and body, then the bodies of their pages.
+    illusts: HashMap<String, (u16, Value)>,
+    illust_pages: HashMap<String, Value>,
+    /// R-18 artworks: their image URLs are only given to the signed-in session.
+    r18: HashSet<String>,
     missing_files: HashSet<String>,
 }
 
@@ -91,6 +96,40 @@ async fn fake_image(State(fake): State<Fake>, Path(name): Path<String>) -> impl 
     ([(header::CONTENT_TYPE, "image/png")], format!("IMG:{name}")).into_response()
 }
 
+const PIXIV_COOKIE: &str = "PHPSESSID=12345_secret";
+
+async fn fake_illust(
+    State(fake): State<Fake>,
+    Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let fake = fake.lock().unwrap();
+    let signed_in = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) == Some(PIXIV_COOKIE);
+    match fake.illusts.get(&id).cloned() {
+        Some((200, mut body)) => {
+            if fake.r18.contains(&id) && !signed_in {
+                body["urls"]["original"] = Value::Null;
+            }
+            Json(json!({"error": false, "message": "", "body": body})).into_response()
+        }
+        Some((code, _)) => (
+            StatusCode::from_u16(code).unwrap(),
+            Json(json!({"error": true, "message": "", "body": []})),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": true, "message": "", "body": []})),
+        )
+            .into_response(),
+    }
+}
+
+async fn fake_illust_pages(State(fake): State<Fake>, Path(id): Path<String>) -> impl IntoResponse {
+    let pages = fake.lock().unwrap().illust_pages.get(&id).cloned();
+    Json(json!({"error": pages.is_none(), "message": "", "body": pages.unwrap_or(json!([]))}))
+}
+
 async fn spawn_upstream() -> (String, Fake) {
     let fake = Fake::default();
     let router = Router::new()
@@ -100,6 +139,8 @@ async fn spawn_upstream() -> (String, Fake) {
         .route("/vi/{id}/{name}", get(fake_thumbnail))
         .route("/pages/{name}", get(fake_page))
         .route("/images/{name}", get(fake_image))
+        .route("/ajax/illust/{id}", get(fake_illust))
+        .route("/ajax/illust/{id}/pages", get(fake_illust_pages))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -132,6 +173,7 @@ impl TestApp {
             home: home.path().to_path_buf(),
             fxtwitter_base_url_env: Some(env_base.unwrap_or_else(|| base.clone())),
             youtube_oembed_url: Some(format!("{base}/oembed")),
+            pixiv_base_url: Some(base.clone()),
         })
         .unwrap();
         arcman::auth::set_password(&state.db(), PASSWORD).unwrap();
@@ -226,6 +268,35 @@ impl TestApp {
             (code, "text/html; charset=utf-8", html.to_string()),
         );
         format!("{}/pages/{name}", self.base)
+    }
+
+    /// An artwork with `pages` original images and the given pixiv tags.
+    fn illust(&self, id: &str, pages: usize, tags: &[&str]) {
+        let image = |i: usize| self.file(&format!("{id}_p{i}.png"));
+        let body = json!({
+            "illustId": id,
+            "illustTitle": format!("artwork {id}"),
+            "illustComment": "first line<br />second <a href=\"/jump.php?x\">line</a>",
+            "userId": "10",
+            "userName": "Painter",
+            "userAccount": "painter",
+            "createDate": "2007-09-09T22:14:00+09:00",
+            "pageCount": pages,
+            "width": 400,
+            "height": 600,
+            "urls": {"original": image(0)},
+            "tags": {"tags": tags.iter().map(|t| json!({"tag": t, "locked": true})).collect::<Vec<_>>()},
+            "likeCount": 5,
+            "bookmarkCount": 7,
+            "viewCount": 90,
+            "userIllusts": {id: {"profileImageUrl": format!("{}/images/painter.jpg", self.base)}}
+        });
+        let pages: Vec<Value> = (0..pages)
+            .map(|i| json!({"urls": {"original": image(i)}, "width": 400, "height": 600 + i}))
+            .collect();
+        let mut fake = self.fake.lock().unwrap();
+        fake.illusts.insert(id.to_string(), (200, body));
+        fake.illust_pages.insert(id.to_string(), json!(pages));
     }
 
     fn file(&self, name: &str) -> String {
@@ -1514,4 +1585,220 @@ async fn live_web_pages_are_bookmarked_with_their_share_images() {
         );
         assert!(d["page"]["image"]["src"].is_string(), "{url}: {d}");
     }
+}
+
+#[tokio::test]
+async fn a_pixiv_artwork_is_saved_with_every_page_and_its_tags() {
+    let app = TestApp::start().await;
+    app.illust("120", 2, &["オリジナル", "風景", "#オリジナル"]);
+    let id = app
+        .save("https://www.pixiv.net/en/artworks/120", None)
+        .await;
+
+    let tiles = app.tiles("").await["tiles"].clone();
+    let tiles = tiles.as_array().unwrap();
+    assert_eq!(tiles.len(), 2);
+    assert_eq!(tiles[1]["kind"], "photo");
+    assert_eq!(
+        (tiles[1]["index"].clone(), tiles[1]["count"].clone()),
+        (json!(1), json!(2))
+    );
+    assert_eq!(tiles[1]["height"], 601);
+    assert_eq!(
+        app.call("GET", tiles[1]["src"].as_str().unwrap(), None)
+            .await
+            .1,
+        "FILE:120_p1.png"
+    );
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["source"], "pixiv");
+    assert_eq!(d["status_id"], "pixiv:120");
+    let status = &d["status"];
+    assert_eq!(status["url"], "https://www.pixiv.net/artworks/120");
+    assert_eq!(status["text"], "artwork 120\nfirst line\nsecond line");
+    assert_eq!(status["posted_at"], 1_189_343_640);
+    assert_eq!(status["author"]["name"], "Painter");
+    assert_eq!(status["author"]["screen_name"], "painter");
+    assert_eq!(
+        app.call("GET", status["author"]["avatar"].as_str().unwrap(), None)
+            .await
+            .1,
+        "IMG:painter.jpg"
+    );
+    assert_eq!(
+        (
+            status["stats"]["likes"].clone(),
+            status["stats"]["bookmarks"].clone(),
+            status["stats"]["reposts"].clone()
+        ),
+        (json!(5), json!(7), Value::Null)
+    );
+    assert_eq!(status["media"].as_array().unwrap().len(), 2);
+    let names: Vec<&str> = d["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["オリジナル", "風景"]);
+
+    assert_eq!(app.tile_post_ids("q=風景").await, vec![id]);
+    assert_eq!(app.tile_post_ids("q=second").await, vec![id]);
+    assert_eq!(app.tile_post_ids("author=painter").await, vec![id]);
+}
+
+#[tokio::test]
+async fn a_pixiv_artwork_does_not_collide_with_an_x_post_of_the_same_id() {
+    let app = TestApp::start().await;
+    app.illust("121", 1, &[]);
+    app.upstream("121", app.status("121", "x post"));
+    let artwork = app.save("https://www.pixiv.net/artworks/121", None).await;
+    let post = app.save("https://x.com/a/status/121", None).await;
+    assert_ne!(artwork, post);
+
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://www.pixiv.net/member_illust.php?mode=medium&illust_id=121", "https://phixiv.net/artworks/121"] })),
+        )
+        .await;
+    assert_eq!(v[0]["post_id"], artwork);
+    assert_eq!(v[0]["outcome"], "duplicate");
+    assert_eq!(v[1]["outcome"], "duplicate");
+}
+
+#[tokio::test]
+async fn missing_or_sign_in_only_artworks_are_rejected_without_being_saved() {
+    let app = TestApp::start().await;
+    app.illust("122", 1, &[]);
+    app.fake.lock().unwrap().r18.insert("122".into());
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://www.pixiv.net/artworks/999", "https://www.pixiv.net/artworks/122"] })),
+        )
+        .await;
+    assert_eq!(v[0]["reason"], "not_found");
+    assert_eq!(v[1]["reason"], "login_required");
+    assert!(app.tiles("").await["tiles"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn r18_artworks_are_saved_with_a_saved_pixiv_session_that_is_never_shown_back() {
+    let app = TestApp::start().await;
+    app.illust("124", 2, &["R-18"]);
+    app.fake.lock().unwrap().r18.insert("124".into());
+    let (_, v) = app.call("GET", "/api/settings", None).await;
+    assert_eq!(v["pixiv_session"], json!({"saved": false}));
+
+    let put = |session: &str| {
+        app.call(
+            "PUT",
+            "/api/settings/pixiv-session",
+            Some(json!({ "session": session })),
+        )
+    };
+    assert_eq!(put("bad; value").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        put(" PHPSESSID=12345_secret ").await.0,
+        StatusCode::NO_CONTENT
+    );
+    let (_, v) = app.call("GET", "/api/settings", None).await;
+    assert_eq!(v["pixiv_session"], json!({"saved": true}));
+    assert!(!v.to_string().contains("secret"), "{v}");
+
+    let id = app.save("https://www.pixiv.net/artworks/124", None).await;
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["state"], "done");
+    assert_eq!(d["status"]["media"].as_array().unwrap().len(), 2);
+    assert!(!d.to_string().contains("secret"), "{d}");
+
+    put("").await;
+    let (_, v) = app.call("GET", "/api/settings", None).await;
+    assert_eq!(v["pixiv_session"], json!({"saved": false}));
+}
+
+#[tokio::test]
+async fn an_unreachable_pixiv_leaves_a_failed_artwork_that_gets_its_tags_on_retry() {
+    let app = TestApp::start().await;
+    app.fake
+        .lock()
+        .unwrap()
+        .illusts
+        .insert("123".into(), (503, Value::Null));
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://www.pixiv.net/artworks/123"] })),
+        )
+        .await;
+    let id = v[0]["post_id"].as_i64().unwrap();
+    assert_eq!(
+        app.tiles("").await["tiles"][0]["failure"],
+        "api_unavailable"
+    );
+
+    app.illust("123", 1, &["back"]);
+    let (s, _) = app
+        .call("POST", &format!("/api/posts/{id}/retry"), None)
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let d = app.wait_until_settled(id).await;
+    assert_eq!(d["state"], "done");
+    assert_eq!(d["tags"][0]["name"], "back");
+}
+
+#[tokio::test]
+async fn pixiv_artworks_have_their_own_media_type_and_count_as_photos() {
+    let app = TestApp::start().await;
+    app.upstream("170", app.with_photos(app.status("170", "photo"), 1));
+    app.illust("171", 1, &[]);
+    let photo = app.save("https://x.com/a/status/170", None).await;
+    let artwork = app.save("https://www.pixiv.net/artworks/171", None).await;
+
+    assert_eq!(app.tile_post_ids("media=pixiv").await, vec![artwork]);
+    assert_eq!(app.tile_post_ids("media=photo").await, vec![artwork, photo]);
+    assert_eq!(app.tile_post_ids("media=text").await, Vec::<i64>::new());
+}
+
+#[tokio::test]
+#[ignore = "hits the real pixiv API and image servers"]
+async fn live_pixiv_artwork_is_saved_with_its_image_and_tags() {
+    let (_, fake) = spawn_upstream().await;
+    let home = TempDir::new().unwrap();
+    let (state, queue) = AppState::open(Config {
+        home: home.path().to_path_buf(),
+        fxtwitter_base_url_env: None,
+        youtube_oembed_url: None,
+        pixiv_base_url: None,
+    })
+    .unwrap();
+    arcman::auth::set_password(&state.db(), PASSWORD).unwrap();
+    let mut app = TestApp {
+        router: arcman::app(state.clone(), queue),
+        state,
+        base: String::new(),
+        fake,
+        cookie: String::new(),
+        _home: home,
+    };
+    app.cookie = app.login(PASSWORD).await.1.unwrap();
+    let id = app.save("https://www.pixiv.net/artworks/20", None).await;
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["state"], "done", "{d}");
+    assert_eq!(d["status"]["author"]["name"], "馬骨");
+    assert!(
+        d["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "やかん"),
+        "{d}"
+    );
+    let file = app.state.media_dir.join(id.to_string()).join("main-0.jpg");
+    assert!(std::fs::metadata(&file).unwrap().len() > 10_000);
 }

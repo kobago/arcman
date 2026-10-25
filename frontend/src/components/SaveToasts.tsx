@@ -128,7 +128,7 @@ function SaveToast({ toast, close }: { toast: Toast; close: (id: number) => void
       case 'invalid_url':
         return { cls: 'invalid_url', mark: '!', msg: t('save.invalid_url') }
       case 'unavailable':
-        return { cls: 'unavailable', mark: '!', msg: t('save.unavailable') }
+        return { cls: 'unavailable', mark: '!', msg: t(r.post?.reason === 'login_required' ? 'save.loginRequired' : 'save.unavailable') }
     }
   }
 

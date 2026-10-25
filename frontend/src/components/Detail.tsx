@@ -94,7 +94,7 @@ function PageInfo({ page }: { page: PageView }) {
   )
 }
 
-function Status({ status, nested }: { status: StatusView; nested?: boolean }) {
+function Status({ status, nested, openLabel }: { status: StatusView; nested?: boolean; openLabel?: string }) {
   const { t, lang } = useI18n()
   const locale = lang === 'ja' ? 'ja-JP' : 'en-US'
   const blocks = (status.article?.content as { blocks?: { text?: string }[] } | undefined)?.blocks ?? []
@@ -108,7 +108,7 @@ function Status({ status, nested }: { status: StatusView; nested?: boolean }) {
         </div>
         {!nested && (
           <a href={status.url} target="_blank" rel="noreferrer" className="link-small">
-            {t('detail.openOnX')} <Icon name="external" size={13} strokeWidth={2} />
+            {openLabel ?? t('detail.openOnX')} <Icon name="external" size={13} strokeWidth={2} />
           </a>
         )}
       </div>
@@ -223,7 +223,7 @@ function Panel({ post }: { post: PostDetail }) {
 
   return (
     <>
-      {post.status && <Status status={post.status} />}
+      {post.status && <Status status={post.status} openLabel={post.source === 'pixiv' ? t('detail.openOnPixiv') : undefined} />}
       {post.video && <VideoInfo video={post.video} />}
       {post.page && <PageInfo page={post.page} />}
       {post.state === 'failed' && (

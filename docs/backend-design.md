@@ -28,6 +28,7 @@
 | `auth.rs` | パスワード、セッション、ログイン失敗の制限、認証ミドルウェア |
 | `fxtwitter.rs` | URL から投稿IDを取り出す、API 呼び出し、レスポンスの型 |
 | `youtube.rs` | URL から動画IDを取り出す、oEmbed の呼び出し、サムネイルのダウンロード計画 |
+| `pixiv.rs` | URL から作品IDを取り出す、ajax API の呼び出し、全ページとアイコンのダウンロード計画 |
 | `web.rs` | URL の正規化、ページの取得とメタデータの読み取り（scraper、文字コードは encoding_rs）、画像とアイコンのダウンロード計画 |
 | `archive.rs` | メディアのダウンロード計画と、1件ずつ処理するワーカー |
 | `posts.rs` | 投稿の保存、タイル、詳細、削除、再試行、フォルダの移動、タグの付け替え |
@@ -43,6 +44,7 @@
 | `ARCMAN_ADDR` | `127.0.0.1:3000` | 待ち受けアドレス。`--addr` が優先 |
 | `ARCMAN_FXTWITTER_BASE_URL` | `https://api.fxtwitter.com` | 設定画面の初期値。画面で保存した値が優先 |
 | `ARCMAN_YOUTUBE_OEMBED_URL` | `https://www.youtube.com/oembed` | テスト用。設定画面には出さない |
+| `ARCMAN_PIXIV_BASE_URL` | `https://www.pixiv.net` | テスト用。設定画面には出さない |
 
 ```
 arcman serve [--addr HOST:PORT]   サーバーを起動する（例: Tailscale 越しなら --addr 0.0.0.0:3000）
@@ -91,7 +93,7 @@ arcman set-password               パスワードを設定する（端末なら2
 | `q` | 本文とタグ名の部分一致 |
 | `tags` | タグ ID のカンマ区切り（AND） |
 | `from`、`to` | 保存日時の範囲（ISO 8601。`to` は含まない） |
-| `media` | `photo`、`video`（GIF を含む）、`text`（ここまでは x.com の投稿だけ）、`youtube`、`web` |
+| `media` | `photo`、`video`（GIF を含む）、`text`（ここまでは x.com の投稿と pixiv の作品だけ）、`pixiv`、`youtube`、`web` |
 | `author` | 投稿者のスクリーンネーム |
 | `order` | `desc`（既定）、`asc` |
 
@@ -124,8 +126,9 @@ arcman set-password               パスワードを設定する（端末なら2
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/api/settings` | 値と、その出どころ（`saved`、`env`、`default`） |
+| GET | `/api/settings` | 値と、その出どころ（`saved`、`env`、`default`）。pixiv のセッションは保存済みかどうか（`{saved}`）だけを返す |
 | PUT | `/api/settings` | `{fxtwitter_base_url}` |
+| PUT | `/api/settings/pixiv-session` | `{session}`。`PHPSESSID=` 付きでも値だけでもよい。空なら削除 |
 
 ## 4. 保存の流れ
 
@@ -143,6 +146,13 @@ arcman set-password               パスワードを設定する（端末なら2
 
 YouTube の動画は、2 の代わりに `GET https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v={id}` を呼ぶ。`400` と `404` は `not_found`、`401` と `403` は `private` として保存しない（埋め込みを禁止した動画も `401` になるので保存できない）。ワーカーはサムネイルだけを保存する。`maxresdefault.jpg` を試し、なければ oEmbed の `thumbnail_url`（`hqdefault.jpg`）にする。サムネイルは 4:3 に黒帯を足した画像のことがあるので、タイルの縦横比は 16:9（ショートは 9:16）にして切り抜く
 
+pixiv の作品は、2 の代わりに `GET https://www.pixiv.net/ajax/illust/{id}` を呼び、複数ページなら `GET /ajax/illust/{id}/pages` も呼ぶ。設定で pixiv のセッションを保存していれば `Cookie: PHPSESSID=...` を付ける（R-18 の作品はこれがないと画像の URL が返らない）。
+
+- `404` などのエラーは `not_found`、`401`・`403` は `private`、画像の URL がない作品（R-18 で、セッションがないか、そのアカウントで R-18 を表示しない設定）は `login_required` として保存しない。ほかの失敗は `api_unavailable` の失敗として保存する
+- スナップショットには読み取った項目（ID、タイトル、キャプションのプレーンテキスト、作者名、アカウント、アイコン、投稿日時、タグ、各ページの原寸画像の URL と大きさ、いいね・ブックマーク・閲覧数）を保存する
+- 作品のタグは、スナップショットを保存するときに arcman のタグとして投稿に付ける（同じタグキーのタグがあればそれを使う）
+- ワーカーは全ページの原寸画像と作者のアイコンを保存する。`i.pximg.net` は `Referer: https://www.pixiv.net/` がないと `403` を返すので付ける。うごイラは1コマ目の画像だけ
+
 Web ページは、2 の代わりにページを `GET` する（20秒で打ち切り、HTML は先頭 1MB まで読む）。
 
 - `404` と `410` は `not_found` として保存しない。ほかの失敗は `page_unavailable` の失敗として保存する
@@ -157,7 +167,7 @@ Web ページは、2 の代わりにページを `GET` する（20秒で打ち�
 
 ## 5. 詳細のレスポンス
 
-スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。YouTube の動画は `status` の代わりに `video`（ID、URL、ショートか、タイトル、チャンネル、サムネイル）を、Web ページは `page`（URL、タイトル、説明文、サイト名、ドメイン、画像、アイコン）を返す。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
+スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。YouTube の動画は `status` の代わりに `video`（ID、URL、ショートか、タイトル、チャンネル、サムネイル）を、Web ページは `page`（URL、タイトル、説明文、サイト名、ドメイン、画像、アイコン）を返す。pixiv の作品は x.com の投稿と同じ `status` の形で返す（本文はタイトルとキャプション、統計はいいね・ブックマーク・閲覧数）。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
 
 ## 6. SPA の配信
 

@@ -11,7 +11,7 @@ use tokio::{io::AsyncWriteExt, sync::mpsc};
 use crate::{
     AppState,
     fxtwitter::{MediaItem, Status},
-    web, youtube,
+    pixiv, web, youtube,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -211,9 +211,11 @@ async fn download(
     dest: &Path,
     image_only: bool,
 ) -> Result<(), String> {
-    let mut res = state
-        .http
-        .get(url)
+    let mut req = state.http.get(url);
+    if let Some(referer) = pixiv::referer(url) {
+        req = req.header(reqwest::header::REFERER, referer);
+    }
+    let mut res = req
         .send()
         .await
         .and_then(|r| r.error_for_status())
@@ -273,6 +275,9 @@ async fn archive_post(state: &AppState, post_id: i64) {
         "web" => serde_json::from_str::<web::Page>(&s)
             .ok()
             .map(|p| web::plan(&p)),
+        "pixiv" => serde_json::from_str::<pixiv::Illust>(&s)
+            .ok()
+            .map(|i| pixiv::plan(&i)),
         _ => serde_json::from_str::<Status>(&s).ok().map(|s| plan(&s)),
     });
     let Some(downloads) = downloads else {

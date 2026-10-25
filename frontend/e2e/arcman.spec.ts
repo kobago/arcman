@@ -189,6 +189,39 @@ test('a YouTube link is saved as a video tile that plays in the detail view', as
   await expect(page.locator('a[data-testid="tile"]')).toHaveCount(1)
 })
 
+test('a pixiv artwork is saved with every page and its tags', async ({ page }) => {
+  await login(page)
+  await save(page, 'https://www.pixiv.net/artworks/5001')
+  await expect(page.getByRole('status')).toContainText('1件を保存しました')
+
+  await page.getByRole('button', { name: '種類' }).click()
+  await page.getByRole('radio', { name: 'pixiv' }).click()
+  await expect(page).toHaveURL(/media=pixiv/)
+  const tiles = page.locator('a[data-testid="tile"]')
+  await expect(tiles).toHaveCount(2)
+  await tiles.first().click()
+  await expect(page.getByTestId('counter')).toHaveText('1 / 2')
+  const panel = page.getByRole('complementary', { name: '投稿の内容' })
+  await expect(panel).toContainText('港の絵描き')
+  await expect(panel).toContainText('二枚目は夜です')
+  await expect(panel).toContainText('風景')
+  await expect(panel).toContainText('夕焼け')
+  await expect(panel.getByRole('link', { name: 'pixiv で開く' })).toHaveAttribute('href', 'https://www.pixiv.net/artworks/5001')
+})
+
+test('a pixiv session is saved without being shown back and can be removed', async ({ page }) => {
+  await login(page)
+  await page.goto('/settings')
+  const field = page.getByLabel('pixiv のセッション（PHPSESSID）')
+  await expect(page.getByText('未設定')).toBeVisible()
+  await field.fill('PHPSESSID=12345_e2e')
+  await page.getByRole('button', { name: '保存' }).nth(1).click()
+  await expect(page.getByText('保存済み')).toBeVisible()
+  await expect(field).toHaveValue('')
+  await page.getByRole('button', { name: '削除' }).click()
+  await expect(page.getByText('未設定')).toBeVisible()
+})
+
 test('a web page is bookmarked with its share image, and one without shows its text', async ({ page }) => {
   await login(page)
   await save(page, 'http://127.0.0.1:3191/pages/harbor?utm_source=feed', 'http://127.0.0.1:3191/pages/plain')

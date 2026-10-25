@@ -57,6 +57,27 @@ const videos: Record<string, unknown> = {
   },
 }
 
+const illusts: Record<string, { body: unknown; pages: unknown[] }> = {
+  '5001': {
+    body: {
+      illustId: '5001',
+      illustTitle: '夕暮れの港',
+      illustComment: '港の夕暮れを描きました<br />二枚目は夜です',
+      userName: '港の絵描き',
+      userAccount: 'harborpainter',
+      createDate: '2026-10-01T18:00:00+09:00',
+      pageCount: 2,
+      urls: { original: file('5001_p0.png') },
+      tags: { tags: [{ tag: '風景' }, { tag: '夕焼け' }] },
+      likeCount: 8,
+      bookmarkCount: 21,
+      viewCount: 300,
+      userIllusts: { '5001': { profileImageUrl: file('harborpainter.png') } },
+    },
+    pages: [0, 1].map((i) => ({ urls: { original: file(`5001_p${i}.png`) }, width: 600, height: 800 })),
+  },
+}
+
 const pages: Record<string, string> = {
   harbor: `<html lang="ja"><head><title>港町の朝 | Harbor Notes</title>
     <meta property="og:title" content="港町の朝を歩く">
@@ -79,6 +100,12 @@ Bun.serve({
     }
     const page = pathname.match(/^\/pages\/(\w+)$/)
     if (page && pages[page[1]]) return new Response(pages[page[1]], { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+    const illust = pathname.match(/^\/ajax\/illust\/(\d+)(\/pages)?$/)
+    if (illust) {
+      const found = illusts[illust[1]]
+      if (!found) return Response.json({ error: true, message: '', body: [] }, { status: 404 })
+      return Response.json({ error: false, message: '', body: illust[2] ? found.pages : found.body })
+    }
     if (pathname === '/oembed') {
       const watch = new URL(new URL(req.url).searchParams.get('url') ?? '')
       const found = videos[watch.searchParams.get('v') ?? '']

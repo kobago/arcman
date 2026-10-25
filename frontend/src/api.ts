@@ -68,7 +68,7 @@ export type PageView = {
 
 export type PostDetail = {
   id: number
-  source: 'x' | 'youtube' | 'web'
+  source: 'x' | 'youtube' | 'web' | 'pixiv'
   status_id: string
   url: string
   state: 'pending' | 'done' | 'failed'
@@ -91,12 +91,15 @@ export type SaveResult = {
   url: string
   outcome: 'created' | 'duplicate' | 'invalid_url' | 'unavailable'
   post_id?: number
-  reason?: 'not_found' | 'private'
+  reason?: 'not_found' | 'private' | 'login_required'
 }
 
 export type PostProgress = { post_id: number; state: 'pending' | 'done' | 'failed'; progress: number | null }
 
-export type Settings = { fxtwitter_base_url: { value: string; source: 'saved' | 'env' | 'default' } }
+export type Settings = {
+  fxtwitter_base_url: { value: string; source: 'saved' | 'env' | 'default' }
+  pixiv_session: { saved: boolean }
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -166,4 +169,5 @@ export const api = {
   settings: () => request<Settings>('GET', '/api/settings'),
   saveSettings: (fxtwitterBaseUrl: string) =>
     request<void>('PUT', '/api/settings', { fxtwitter_base_url: fxtwitterBaseUrl }),
+  savePixivSession: (session: string) => request<void>('PUT', '/api/settings/pixiv-session', { session }),
 }

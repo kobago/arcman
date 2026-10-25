@@ -6,10 +6,10 @@
 
 | 用語 | 英語名 | 意味 |
 |---|---|---|
-| 投稿 | Post | arcman が保存した x.com の投稿、YouTube の動画、Web ページのいずれか1件。保存の単位であり、削除の単位 |
-| 取得元 | Source | 投稿がどのサイトのものか。`x`、`youtube`、`web` |
-| 投稿ID | StatusId | x.com 上の投稿の ID（数字の文字列）、YouTube の動画 ID（11文字）、Web ページの正規化した URL。URL の形式が違っても同じ投稿なら同じ値になる |
-| スナップショット | Snapshot | 保存した時点で fxtwitter API（YouTube は oEmbed）が返した JSON。Web ページはページから取り出したメタデータの JSON。後から変更しない |
+| 投稿 | Post | arcman が保存した x.com の投稿、pixiv の作品、YouTube の動画、Web ページのいずれか1件。保存の単位であり、削除の単位 |
+| 取得元 | Source | 投稿がどのサイトのものか。`x`、`pixiv`、`youtube`、`web` |
+| 投稿ID | StatusId | x.com 上の投稿の ID（数字の文字列）、pixiv の作品 ID に `pixiv:` を付けたもの（X の ID と重ならないように）、YouTube の動画 ID（11文字）、Web ページの正規化した URL。URL の形式が違っても同じ投稿なら同じ値になる |
+| スナップショット | Snapshot | 保存した時点で fxtwitter API（YouTube は oEmbed）が返した JSON。pixiv の作品は ajax API から、Web ページはページから取り出した項目の JSON。後から変更しない |
 | 取得状態 | ArchiveState | 投稿のアーカイブがどこまで進んだか。取得中、完了、失敗のいずれか |
 | メディア | Media | 投稿に属する、ローカルに保存したファイル1つ（画像、動画、GIF） |
 | 役割 | MediaRole | そのメディアが投稿のどこに現れるか。本体、引用元、投稿者アイコン、リンクカード、X記事 |
@@ -90,8 +90,9 @@ classDiagram
 
 - **投稿ID（StatusId）**: 受け付ける URL から取り出す。ホストは `x.com`、`twitter.com`、`mobile.twitter.com`、`fixupx.com`、`fxtwitter.com`、`vxtwitter.com`。パスは `/{screen_name}/status/{id}`（`/i/status/{id}` と `statuses` も可）。クエリとフラグメントは無視する
 - **投稿ID（YouTube）**: `youtube.com` の `/watch?v=`、`/shorts/`、`/live/`、`/embed/`、`/v/` と `youtu.be/` から取り出す。ショートかどうかは保存した URL から判断する
+- **投稿ID（pixiv）**: `pixiv.net` と `phixiv.net`（`www.` を含む）の `/artworks/{id}`（`/en/artworks/{id}` なども可）、`/i/{id}`、`/member_illust.php?illust_id={id}` から取り出す
 - **投稿ID（Web）**: `http`・`https` の URL から、フラグメントと計測用のクエリ（`utm_*`、`fbclid`、`gclid`、`igshid`、`mc_cid`、`mc_eid`、`yclid`）を除いたもの
-- **投稿者（Author）**: スクリーンネーム、表示名。アイコンはメディア（役割: 投稿者アイコン）として持つ。YouTube はチャンネルのハンドル（なければチャンネルURLの最後の部分）と名前で、本文はタイトル。Web ページはドメインとサイト名で、本文はタイトルと説明文、アイコンはサイトのアイコン
+- **投稿者（Author）**: スクリーンネーム、表示名。アイコンはメディア（役割: 投稿者アイコン）として持つ。YouTube はチャンネルのハンドル（なければチャンネルURLの最後の部分）と名前で、本文はタイトル。pixiv はアカウント名と作者名で、本文はタイトルとキャプション。Web ページはドメインとサイト名で、本文はタイトルと説明文、アイコンはサイトのアイコン
 - **取得状態（ArchiveState）**: 取得中（Pending）、完了（Done）、失敗（Failed）。失敗には理由（API に接続できない、メディアのダウンロードに失敗した）を持つ
 - **メディアの種類（MediaKind）**: 画像（Photo）、動画（Video）、GIF（Gif）
 - **メディアの役割（MediaRole）**: 本体（Main）、引用元（Quote）、投稿者アイコン（Avatar）、引用元の投稿者アイコン（QuoteAvatar）、リンクカード（Card）、X記事（Article）

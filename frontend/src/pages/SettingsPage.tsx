@@ -58,6 +58,61 @@ function ApiBaseForm({ initial }: { initial: string }) {
   )
 }
 
+function PixivSessionForm({ saved }: { saved: boolean }) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const [session, setSession] = useState('')
+  const save = useMutation({
+    mutationFn: (value: string) => api.savePixivSession(value),
+    onSuccess: () => (setSession(''), qc.invalidateQueries({ queryKey: ['settings'] })),
+  })
+  return (
+    <form
+      className="settings-form"
+      onSubmit={(e) => {
+        e.preventDefault()
+        save.mutate(session)
+      }}
+    >
+      <label htmlFor="pixiv-session">{t('settings.pixivSession')}</label>
+      <div className="row">
+        <input
+          id="pixiv-session"
+          className="input mono grow"
+          type="password"
+          autoComplete="off"
+          required
+          placeholder={t('settings.pixivSessionPlaceholder')}
+          value={session}
+          onChange={(e) => (setSession(e.target.value), save.reset())}
+        />
+        <button type="submit" className="btn btn-primary" disabled={save.isPending}>
+          {t('common.save')}
+        </button>
+      </div>
+      <p className="muted small source-line">
+        <span className="chip-static">{t(saved ? 'settings.pixivSessionSaved' : 'settings.pixivSessionNone')}</span>
+        {saved && (
+          <button type="button" className="btn btn-ghost" disabled={save.isPending} onClick={() => save.mutate('')}>
+            {t('settings.pixivSessionClear')}
+          </button>
+        )}
+      </p>
+      {save.isSuccess && (
+        <p role="status" className="small">
+          {t('settings.saved')}
+        </p>
+      )}
+      {save.isError && (
+        <p className="form-error" role="alert">
+          {errorMessage(t, save.error)}
+        </p>
+      )}
+      <p className="muted small">{t('settings.pixivSessionHint')}</p>
+    </form>
+  )
+}
+
 export function SettingsPage() {
   const { t, lang, setLang } = useI18n()
   const [theme, setTheme] = useTheme()
@@ -105,6 +160,7 @@ export function SettingsPage() {
             {source && <span className="chip-static">{t(`settings.source.${source}`)}</span>}
             {t('settings.apiBaseHint')}
           </p>
+          {settings.data && <PixivSessionForm saved={settings.data.pixiv_session.saved} />}
         </section>
 
         <section className="settings-card" aria-labelledby="sec-login">

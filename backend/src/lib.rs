@@ -4,6 +4,7 @@ pub mod db;
 pub mod error;
 pub mod fxtwitter;
 pub mod organize;
+pub mod pixiv;
 pub mod posts;
 pub mod settings;
 pub mod tags;
@@ -30,6 +31,7 @@ pub struct Config {
     pub home: PathBuf,
     pub fxtwitter_base_url_env: Option<String>,
     pub youtube_oembed_url: Option<String>,
+    pub pixiv_base_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -38,6 +40,7 @@ pub struct AppState {
     pub media_dir: PathBuf,
     pub fxtwitter_base_url_env: Option<Arc<str>>,
     pub youtube_oembed_url: Arc<str>,
+    pub pixiv_base_url: Arc<str>,
     pub http: reqwest::Client,
     pub archive_queue: mpsc::UnboundedSender<i64>,
     pub login_guard: Arc<Mutex<auth::LoginGuard>>,
@@ -57,6 +60,10 @@ impl AppState {
             youtube_oembed_url: config
                 .youtube_oembed_url
                 .unwrap_or_else(|| youtube::DEFAULT_OEMBED_URL.into())
+                .into(),
+            pixiv_base_url: config
+                .pixiv_base_url
+                .unwrap_or_else(|| pixiv::DEFAULT_BASE_URL.into())
                 .into(),
             http: reqwest::Client::builder()
                 .user_agent(concat!("arcman/", env!("CARGO_PKG_VERSION")))
@@ -114,6 +121,10 @@ pub fn app(state: AppState, queue: mpsc::UnboundedReceiver<i64>) -> Router {
             axum::routing::patch(tags::update).delete(tags::delete),
         )
         .route("/api/settings", get(settings::get).put(settings::put))
+        .route(
+            "/api/settings/pixiv-session",
+            put(settings::put_pixiv_session),
+        )
         .nest_service("/media", ServeDir::new(&state.media_dir))
         .layer(middleware::from_fn_with_state(
             state.clone(),

@@ -13,7 +13,7 @@ use crate::{
     AppState,
     error::{ApiError, ApiResult},
     fxtwitter::{self, Card, FetchError, Note, Status, Translation},
-    settings, tags, web, youtube,
+    pixiv, settings, tags, web, youtube,
 };
 
 pub fn remove_media_dir(state: &AppState, post_id: i64) {
@@ -42,6 +42,8 @@ fn ensure_folder(conn: &Connection, id: Option<i64>) -> ApiResult<()> {
 enum Target {
     X(String),
     Youtube(youtube::Video),
+    /// An artwork, by its prefixed status id.
+    Pixiv(String),
     /// Any other web page, by its normalized URL.
     Web(String),
 }
@@ -51,6 +53,7 @@ impl Target {
         fxtwitter::parse_status_id(url)
             .map(Self::X)
             .or_else(|| youtube::parse_video(url).map(Self::Youtube))
+            .or_else(|| pixiv::parse_status_id(url).map(Self::Pixiv))
             .or_else(|| web::normalize(url).map(Self::Web))
     }
 
@@ -58,6 +61,7 @@ impl Target {
         match self {
             Self::X(_) => "x",
             Self::Youtube(_) => "youtube",
+            Self::Pixiv(_) => "pixiv",
             Self::Web(_) => "web",
         }
     }
@@ -66,7 +70,7 @@ impl Target {
         match self {
             Self::X(id) => id,
             Self::Youtube(v) => &v.id,
-            Self::Web(url) => url,
+            Self::Pixiv(id) | Self::Web(id) => id,
         }
     }
 }
@@ -79,6 +83,8 @@ struct Snapshot {
     text: String,
     lang: Option<String>,
     posted_at: Option<i64>,
+    /// Tags the upstream post carries, added to the post's own tags.
+    tags: Vec<String>,
 }
 
 fn unreachable_failure(source: &str) -> &'static str {
@@ -103,6 +109,7 @@ async fn fetch_snapshot(
             text: page.text(),
             lang: page.lang,
             posted_at: None,
+            tags: vec![],
         });
     }
     if source == "youtube" {
@@ -115,6 +122,27 @@ async fn fetch_snapshot(
             text: video.title,
             lang: None,
             posted_at: None,
+            tags: vec![],
+        });
+    }
+    if source == "pixiv" {
+        let session =
+            settings::pixiv_session(state).map_err(|e| FetchError::Transport(e.to_string()))?;
+        let (raw, illust) = pixiv::fetch(
+            &state.http,
+            &state.pixiv_base_url,
+            session.as_deref(),
+            status_id,
+        )
+        .await?;
+        return Ok(Snapshot {
+            raw,
+            text: illust.text(),
+            author_screen_name: illust.user_account,
+            author_name: illust.user_name,
+            lang: None,
+            posted_at: illust.created_at,
+            tags: illust.tags,
         });
     }
     let base =
@@ -127,10 +155,11 @@ async fn fetch_snapshot(
         text: status.text,
         lang: status.lang,
         posted_at: status.created_timestamp,
+        tags: vec![],
     })
 }
 
-fn store_snapshot(conn: &Connection, post_id: i64, s: &Snapshot) -> rusqlite::Result<()> {
+fn store_snapshot(conn: &Connection, post_id: i64, s: &Snapshot) -> ApiResult<()> {
     conn.execute(
         "UPDATE posts SET author_screen_name = ?1, author_name = ?2, text = ?3, lang = ?4,
              posted_at = strftime('%Y-%m-%dT%H:%M:%SZ', ?5, 'unixepoch'),
@@ -146,6 +175,12 @@ fn store_snapshot(conn: &Connection, post_id: i64, s: &Snapshot) -> rusqlite::Re
             post_id
         ],
     )?;
+    for name in s.tags.iter().filter(|n| tags::normalize(n).is_some()) {
+        conn.execute(
+            "INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?1, ?2)",
+            [post_id, tags::find_or_create(conn, name)?],
+        )?;
+    }
     Ok(())
 }
 
@@ -373,18 +408,18 @@ pub async fn tiles(
         }
     }
     let media_kinds: Option<&[&str]> = match q.media.as_deref() {
-        None | Some("youtube" | "web") => None,
+        None | Some("youtube" | "web" | "pixiv") => None,
         Some("photo") => Some(&["photo"]),
         Some("video") => Some(&["video", "gif"]),
         Some("text") => Some(&[]),
         Some(_) => return Err(ApiError::BadRequest("invalid_media")),
     };
-    // The other media types are about X posts; YouTube videos and web pages are types of their own.
-    if let Some(source @ ("youtube" | "web")) = q.media.as_deref() {
+    // The other media types are about X posts and pixiv artworks; each site is also a type of its own.
+    if let Some(source @ ("youtube" | "web" | "pixiv")) = q.media.as_deref() {
         wh.push("p.source = ? AND p.state = 'done'".into());
         args.push(source.to_string().into());
     } else if media_kinds.is_some() {
-        wh.push("p.source = 'x'".into());
+        wh.push("p.source IN ('x', 'pixiv')".into());
     }
     match media_kinds {
         Some([]) => wh.push(format!("p.state = 'done' AND NOT EXISTS ({MAIN_MEDIA_OF})")),
@@ -871,6 +906,36 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
                         url: o.author_url,
                     },
                     thumbnail: local.first("main"),
+                });
+        }
+        "pixiv" => {
+            detail.status = snapshot
+                .and_then(|s| serde_json::from_str::<pixiv::Illust>(&s).ok())
+                .map(|i| StatusView {
+                    url: pixiv::artwork_url(&i.id),
+                    text: i.text(),
+                    lang: None,
+                    posted_at: i.created_at,
+                    author: AuthorView {
+                        name: i.user_name,
+                        screen_name: i.user_account,
+                        avatar: local.first("avatar"),
+                    },
+                    stats: Stats {
+                        likes: i.likes,
+                        reposts: None,
+                        quotes: None,
+                        replies: None,
+                        views: i.views,
+                        bookmarks: i.bookmarks,
+                    },
+                    media: local.by_role("main"),
+                    translation: None,
+                    quote: None,
+                    card: None,
+                    poll: None,
+                    community_note: None,
+                    article: None,
                 });
         }
         "web" => {
