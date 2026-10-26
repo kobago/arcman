@@ -29,6 +29,8 @@ struct Upstream {
     /// pixiv artworks by id: the ajax status and body, then the bodies of their pages.
     illusts: HashMap<String, (u16, Value)>,
     illust_pages: HashMap<String, Value>,
+    /// ASMR Online works by id.
+    works: HashMap<String, Value>,
     /// R-18 artworks: their image URLs are only given to the signed-in session.
     r18: HashSet<String>,
     missing_files: HashSet<String>,
@@ -130,6 +132,13 @@ async fn fake_illust_pages(State(fake): State<Fake>, Path(id): Path<String>) -> 
     Json(json!({"error": pages.is_none(), "message": "", "body": pages.unwrap_or(json!([]))}))
 }
 
+async fn fake_work(State(fake): State<Fake>, Path(id): Path<String>) -> impl IntoResponse {
+    match fake.lock().unwrap().works.get(&id).cloned() {
+        Some(work) => Json(work).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response(),
+    }
+}
+
 async fn spawn_upstream() -> (String, Fake) {
     let fake = Fake::default();
     let router = Router::new()
@@ -141,6 +150,7 @@ async fn spawn_upstream() -> (String, Fake) {
         .route("/images/{name}", get(fake_image))
         .route("/ajax/illust/{id}", get(fake_illust))
         .route("/ajax/illust/{id}/pages", get(fake_illust_pages))
+        .route("/api/workInfo/{id}", get(fake_work))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -174,6 +184,7 @@ impl TestApp {
             fxtwitter_base_url_env: Some(env_base.unwrap_or_else(|| base.clone())),
             youtube_oembed_url: Some(format!("{base}/oembed")),
             pixiv_base_url: Some(base.clone()),
+            asmr_base_url: Some(base.clone()),
         })
         .unwrap();
         arcman::auth::set_password(&state.db(), PASSWORD).unwrap();
@@ -1649,6 +1660,51 @@ async fn a_pixiv_artwork_is_saved_with_every_page_and_its_tags() {
 }
 
 #[tokio::test]
+async fn an_asmr_online_work_is_bookmarked_from_its_api_with_its_cover_and_tags() {
+    let app = TestApp::start().await;
+    let cover = format!("{}/images/RJ01201653.jpg", app.base);
+    app.fake.lock().unwrap().works.insert(
+        "1201653".into(),
+        json!({
+            "id": 1201653,
+            "title": "幼馴染の囁き",
+            "name": "おいしいおこめ",
+            "release": "2024-05-31",
+            "vas": [{"id": "x", "name": "餅梨あむ"}],
+            "tags": [{"name": "耳舐め", "i18n": {"ja-jp": {"name": "耳舐め"}}}],
+            "mainCoverUrl": cover,
+        }),
+    );
+    let id = app.save("https://www.asmr.one/work/RJ01201653", None).await;
+
+    let tile = app.tiles("").await["tiles"][0].clone();
+    assert_eq!(tile["kind"], "web");
+    assert_eq!(tile["text"], "幼馴染の囁き\nおいしいおこめ / CV: 餅梨あむ");
+    assert_eq!(tile["author_name"], "おいしいおこめ");
+    assert_eq!(
+        app.call("GET", tile["src"].as_str().unwrap(), None).await.1,
+        "IMG:RJ01201653.jpg"
+    );
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["source"], "web");
+    assert_eq!(d["page"]["title"], "幼馴染の囁き");
+    assert_eq!(d["page"]["site_name"], "ASMR Online");
+    assert_eq!(d["page"]["host"], "asmr.one");
+    assert_eq!(d["tags"][0]["name"], "耳舐め");
+
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://asmr.one/work/RJ01000000"] })),
+        )
+        .await;
+    assert_eq!(v[0]["outcome"], "unavailable", "{v}");
+    assert_eq!(v[0]["reason"], "not_found");
+}
+
+#[tokio::test]
 async fn a_pixiv_artwork_does_not_collide_with_an_x_post_of_the_same_id() {
     let app = TestApp::start().await;
     app.illust("121", 1, &[]);
@@ -1775,6 +1831,7 @@ async fn live_pixiv_artwork_is_saved_with_its_image_and_tags() {
         fxtwitter_base_url_env: None,
         youtube_oembed_url: None,
         pixiv_base_url: None,
+        asmr_base_url: None,
     })
     .unwrap();
     arcman::auth::set_password(&state.db(), PASSWORD).unwrap();

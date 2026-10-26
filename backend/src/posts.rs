@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AppState,
+    AppState, asmr,
     error::{ApiError, ApiResult},
     fxtwitter::{self, Card, FetchError, Note, Status, Translation},
     pixiv, settings, tags, web, youtube,
@@ -100,6 +100,20 @@ async fn fetch_snapshot(
     source: &str,
     status_id: &str,
 ) -> Result<Snapshot, FetchError> {
+    if source == "web"
+        && let Some(id) = asmr::parse_work_id(status_id)
+    {
+        let work = asmr::fetch(&state.http, &state.asmr_base_url, status_id, id).await?;
+        return Ok(Snapshot {
+            raw: serde_json::to_value(&work.page).expect("a page serializes"),
+            author_screen_name: work.page.host(),
+            author_name: work.circle,
+            text: work.page.text(),
+            lang: None,
+            posted_at: work.released_at,
+            tags: work.tags,
+        });
+    }
     if source == "web" {
         let (raw, page) = web::fetch(&state.http, status_id).await?;
         return Ok(Snapshot {

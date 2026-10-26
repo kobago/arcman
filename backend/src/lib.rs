@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod asmr;
 pub mod auth;
 pub mod db;
 pub mod error;
@@ -32,6 +33,7 @@ pub struct Config {
     pub fxtwitter_base_url_env: Option<String>,
     pub youtube_oembed_url: Option<String>,
     pub pixiv_base_url: Option<String>,
+    pub asmr_base_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -41,6 +43,7 @@ pub struct AppState {
     pub fxtwitter_base_url_env: Option<Arc<str>>,
     pub youtube_oembed_url: Arc<str>,
     pub pixiv_base_url: Arc<str>,
+    pub asmr_base_url: Arc<str>,
     pub http: reqwest::Client,
     pub archive_queue: mpsc::UnboundedSender<i64>,
     pub login_guard: Arc<Mutex<auth::LoginGuard>>,
@@ -64,6 +67,10 @@ impl AppState {
             pixiv_base_url: config
                 .pixiv_base_url
                 .unwrap_or_else(|| pixiv::DEFAULT_BASE_URL.into())
+                .into(),
+            asmr_base_url: config
+                .asmr_base_url
+                .unwrap_or_else(|| asmr::DEFAULT_BASE_URL.into())
                 .into(),
             http: reqwest::Client::builder()
                 .user_agent(concat!("arcman/", env!("CARGO_PKG_VERSION")))

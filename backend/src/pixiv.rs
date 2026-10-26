@@ -151,7 +151,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// Reads `2007-09-09T22:14:00+09:00`, the form pixiv gives its dates in.
-fn unix_time(s: &str) -> Option<i64> {
+pub(crate) fn unix_time(s: &str) -> Option<i64> {
     let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
     let (date, time) = (
         days_from_civil(num(0..4)?, num(5..7)?, num(8..10)?),
