@@ -58,12 +58,36 @@ function ApiBaseForm({ initial }: { initial: string }) {
   )
 }
 
-function PixivSessionForm({ saved }: { saved: boolean }) {
+const SESSION_FORMS = {
+  pixiv: {
+    id: 'pixiv-session',
+    label: 'settings.pixivSession',
+    saved: 'settings.pixivSessionSaved',
+    none: 'settings.pixivSessionNone',
+    placeholder: 'settings.pixivSessionPlaceholder',
+    clear: 'settings.pixivSessionClear',
+    hint: 'settings.pixivSessionHint',
+  },
+  reddit: {
+    id: 'reddit-session',
+    label: 'settings.redditSession',
+    saved: 'settings.redditSessionSaved',
+    none: 'settings.redditSessionNone',
+    placeholder: 'settings.redditSessionPlaceholder',
+    clear: 'settings.redditSessionClear',
+    hint: 'settings.redditSessionHint',
+  },
+} as const
+
+type SessionKind = keyof typeof SESSION_FORMS
+
+function SessionForm({ kind, saved }: { kind: SessionKind; saved: boolean }) {
   const { t } = useI18n()
   const qc = useQueryClient()
   const [session, setSession] = useState('')
+  const keys = SESSION_FORMS[kind]
   const save = useMutation({
-    mutationFn: (value: string) => api.savePixivSession(value),
+    mutationFn: (value: string) => (kind === 'pixiv' ? api.savePixivSession(value) : api.saveRedditSession(value)),
     onSuccess: () => (setSession(''), qc.invalidateQueries({ queryKey: ['settings'] })),
   })
   return (
@@ -74,15 +98,15 @@ function PixivSessionForm({ saved }: { saved: boolean }) {
         save.mutate(session)
       }}
     >
-      <label htmlFor="pixiv-session">{t('settings.pixivSession')}</label>
+      <label htmlFor={keys.id}>{t(keys.label)}</label>
       <div className="row">
         <input
-          id="pixiv-session"
+          id={keys.id}
           className="input mono grow"
           type="password"
           autoComplete="off"
           required
-          placeholder={t('settings.pixivSessionPlaceholder')}
+          placeholder={t(keys.placeholder)}
           value={session}
           onChange={(e) => (setSession(e.target.value), save.reset())}
         />
@@ -91,10 +115,10 @@ function PixivSessionForm({ saved }: { saved: boolean }) {
         </button>
       </div>
       <p className="muted small source-line">
-        <span className="chip-static">{t(saved ? 'settings.pixivSessionSaved' : 'settings.pixivSessionNone')}</span>
+        <span className="chip-static">{t(saved ? keys.saved : keys.none)}</span>
         {saved && (
           <button type="button" className="btn btn-ghost" disabled={save.isPending} onClick={() => save.mutate('')}>
-            {t('settings.pixivSessionClear')}
+            {t(keys.clear)}
           </button>
         )}
       </p>
@@ -108,7 +132,7 @@ function PixivSessionForm({ saved }: { saved: boolean }) {
           {errorMessage(t, save.error)}
         </p>
       )}
-      <p className="muted small">{t('settings.pixivSessionHint')}</p>
+      <p className="muted small">{t(keys.hint)}</p>
     </form>
   )
 }
@@ -160,7 +184,8 @@ export function SettingsPage() {
             {source && <span className="chip-static">{t(`settings.source.${source}`)}</span>}
             {t('settings.apiBaseHint')}
           </p>
-          {settings.data && <PixivSessionForm saved={settings.data.pixiv_session.saved} />}
+          {settings.data && <SessionForm kind="pixiv" saved={settings.data.pixiv_session.saved} />}
+          {settings.data && <SessionForm kind="reddit" saved={settings.data.reddit_session.saved} />}
         </section>
 
         <section className="settings-card" aria-labelledby="sec-login">

@@ -4,9 +4,11 @@ pub mod auth;
 pub mod db;
 pub mod error;
 pub mod fxtwitter;
+pub mod imgur;
 pub mod organize;
 pub mod pixiv;
 pub mod posts;
+pub mod reddit;
 pub mod settings;
 pub mod tags;
 pub mod web;
@@ -34,6 +36,8 @@ pub struct Config {
     pub youtube_oembed_url: Option<String>,
     pub pixiv_base_url: Option<String>,
     pub asmr_base_url: Option<String>,
+    pub imgur_base_url: Option<String>,
+    pub reddit_base_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -44,6 +48,8 @@ pub struct AppState {
     pub youtube_oembed_url: Arc<str>,
     pub pixiv_base_url: Arc<str>,
     pub asmr_base_url: Arc<str>,
+    pub imgur_base_url: Arc<str>,
+    pub reddit_base_url: Arc<str>,
     pub http: reqwest::Client,
     pub archive_queue: mpsc::UnboundedSender<i64>,
     pub login_guard: Arc<Mutex<auth::LoginGuard>>,
@@ -71,6 +77,14 @@ impl AppState {
             asmr_base_url: config
                 .asmr_base_url
                 .unwrap_or_else(|| asmr::DEFAULT_BASE_URL.into())
+                .into(),
+            imgur_base_url: config
+                .imgur_base_url
+                .unwrap_or_else(|| imgur::DEFAULT_BASE_URL.into())
+                .into(),
+            reddit_base_url: config
+                .reddit_base_url
+                .unwrap_or_else(|| reddit::DEFAULT_BASE_URL.into())
                 .into(),
             http: reqwest::Client::builder()
                 .user_agent(concat!("arcman/", env!("CARGO_PKG_VERSION")))
@@ -131,6 +145,10 @@ pub fn app(state: AppState, queue: mpsc::UnboundedReceiver<i64>) -> Router {
         .route(
             "/api/settings/pixiv-session",
             put(settings::put_pixiv_session),
+        )
+        .route(
+            "/api/settings/reddit-session",
+            put(settings::put_reddit_session),
         )
         .nest_service("/media", ServeDir::new(&state.media_dir))
         .layer(middleware::from_fn_with_state(

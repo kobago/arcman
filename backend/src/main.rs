@@ -21,7 +21,9 @@ environment:
   ARCMAN_FXTWITTER_BASE_URL   initial fxtwitter API base URL
   ARCMAN_YOUTUBE_OEMBED_URL   YouTube oEmbed endpoint (for tests)
   ARCMAN_PIXIV_BASE_URL       pixiv base URL for its ajax API (for tests)
-  ARCMAN_ASMR_BASE_URL        ASMR Online API base URL (for tests)";
+  ARCMAN_ASMR_BASE_URL        ASMR Online API base URL (for tests)
+  ARCMAN_IMGUR_BASE_URL       imgur base URL (for tests)
+  ARCMAN_REDDIT_BASE_URL      reddit base URL (for tests)";
 
 fn config() -> BoxResult<Config> {
     let home = match env::var_os("ARCMAN_HOME") {
@@ -40,6 +42,12 @@ fn config() -> BoxResult<Config> {
             .ok()
             .filter(|s| !s.is_empty()),
         asmr_base_url: env::var("ARCMAN_ASMR_BASE_URL")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        imgur_base_url: env::var("ARCMAN_IMGUR_BASE_URL")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        reddit_base_url: env::var("ARCMAN_REDDIT_BASE_URL")
             .ok()
             .filter(|s| !s.is_empty()),
     })

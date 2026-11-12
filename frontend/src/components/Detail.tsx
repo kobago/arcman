@@ -223,7 +223,20 @@ function Panel({ post }: { post: PostDetail }) {
 
   return (
     <>
-      {post.status && <Status status={post.status} openLabel={post.source === 'pixiv' ? t('detail.openOnPixiv') : undefined} />}
+      {post.status && (
+        <Status
+          status={post.status}
+          openLabel={
+            post.source === 'pixiv'
+              ? t('detail.openOnPixiv')
+              : post.source === 'imgur'
+                ? t('detail.openOnImgur')
+                : post.source === 'reddit'
+                  ? t('detail.openOnReddit')
+                  : undefined
+          }
+        />
+      )}
       {post.video && <VideoInfo video={post.video} />}
       {post.page && <PageInfo page={post.page} />}
       {post.state === 'failed' && (

@@ -10,6 +10,7 @@ use crate::{
 pub const DEFAULT_FXTWITTER_BASE_URL: &str = "https://api.fxtwitter.com";
 const FXTWITTER_KEY: &str = "fxtwitter_base_url";
 const PIXIV_SESSION_KEY: &str = "pixiv_session";
+const REDDIT_SESSION_KEY: &str = "reddit_session";
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Resolved {
@@ -61,16 +62,30 @@ pub fn pixiv_session(state: &AppState) -> rusqlite::Result<Option<String>> {
         .optional()
 }
 
+/// The reddit_session cookie of a signed-in Reddit account. Unauthenticated `.json`
+/// requests are refused now, and NSFW or gallery posts need a session.
+pub fn reddit_session(state: &AppState) -> rusqlite::Result<Option<String>> {
+    state
+        .db()
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [REDDIT_SESSION_KEY],
+            |r| r.get(0),
+        )
+        .optional()
+}
+
 /// The session itself is never sent back, only whether one is saved.
 #[derive(Serialize)]
-pub struct PixivSessionView {
+pub struct SessionView {
     saved: bool,
 }
 
 #[derive(Serialize)]
 pub struct SettingsView {
     fxtwitter_base_url: Resolved,
-    pixiv_session: PixivSessionView,
+    pixiv_session: SessionView,
+    reddit_session: SessionView,
 }
 
 pub async fn get(State(state): State<AppState>) -> ApiResult<Json<SettingsView>> {
@@ -78,8 +93,11 @@ pub async fn get(State(state): State<AppState>) -> ApiResult<Json<SettingsView>>
     let fxtwitter_base_url = resolve(&state.db(), FXTWITTER_KEY, env, DEFAULT_FXTWITTER_BASE_URL)?;
     Ok(Json(SettingsView {
         fxtwitter_base_url,
-        pixiv_session: PixivSessionView {
+        pixiv_session: SessionView {
             saved: pixiv_session(&state)?.is_some(),
+        },
+        reddit_session: SessionView {
+            saved: reddit_session(&state)?.is_some(),
         },
     }))
 }
@@ -135,6 +153,46 @@ pub async fn put_pixiv_session(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value",
         [PIXIV_SESSION_KEY, session],
+    )?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct RedditSessionInput {
+    session: String,
+}
+
+/// Accepts the bare value or `reddit_session=...` as copied from the browser. Empty clears it.
+pub async fn put_reddit_session(
+    State(state): State<AppState>,
+    Json(input): Json<RedditSessionInput>,
+) -> ApiResult<StatusCode> {
+    let input = input.session.trim();
+    let value = input
+        .strip_prefix("reddit_session=")
+        .or_else(|| {
+            input
+                .find("reddit_session=")
+                .map(|i| &input[i + "reddit_session=".len()..])
+        })
+        .unwrap_or(input);
+    let session = value.split(';').next().unwrap_or(value).trim();
+    if session.is_empty() {
+        state
+            .db()
+            .execute("DELETE FROM settings WHERE key = ?1", [REDDIT_SESSION_KEY])?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    if session
+        .bytes()
+        .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+    {
+        return Err(ApiError::BadRequest("invalid_session"));
+    }
+    state.db().execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [REDDIT_SESSION_KEY, session],
     )?;
     Ok(StatusCode::NO_CONTENT)
 }

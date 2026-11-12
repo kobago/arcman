@@ -11,7 +11,7 @@ use tokio::{io::AsyncWriteExt, sync::mpsc};
 use crate::{
     AppState,
     fxtwitter::{MediaItem, Status},
-    pixiv, web, youtube,
+    imgur, pixiv, reddit, web, youtube,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -278,6 +278,12 @@ async fn archive_post(state: &AppState, post_id: i64) {
         "pixiv" => serde_json::from_str::<pixiv::Illust>(&s)
             .ok()
             .map(|i| pixiv::plan(&i)),
+        "imgur" => serde_json::from_str::<imgur::Post>(&s)
+            .ok()
+            .map(|p| imgur::plan(&p)),
+        "reddit" => serde_json::from_str::<reddit::Post>(&s)
+            .ok()
+            .map(|p| reddit::plan(&p)),
         _ => serde_json::from_str::<Status>(&s).ok().map(|s| plan(&s)),
     });
     let Some(downloads) = downloads else {

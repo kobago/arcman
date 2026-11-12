@@ -119,6 +119,28 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE posts_new RENAME TO posts;
     CREATE INDEX posts_saved_at ON posts (saved_at, id);
     CREATE INDEX posts_folder ON posts (folder_id);",
+    // Imgur and reddit posts are kept under their own sources as well.
+    "CREATE TABLE posts_new (
+        id INTEGER PRIMARY KEY,
+        status_id TEXT NOT NULL UNIQUE,
+        source_url TEXT NOT NULL,
+        author_screen_name TEXT NOT NULL DEFAULT '',
+        author_name TEXT NOT NULL DEFAULT '',
+        text TEXT NOT NULL DEFAULT '',
+        lang TEXT,
+        posted_at TEXT,
+        saved_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        state TEXT NOT NULL CHECK (state IN ('pending', 'done', 'failed')),
+        failure TEXT,
+        snapshot TEXT,
+        folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+        source TEXT NOT NULL DEFAULT 'x' CHECK (source IN ('x', 'youtube', 'web', 'pixiv', 'imgur', 'reddit'))
+    );
+    INSERT INTO posts_new SELECT * FROM posts;
+    DROP TABLE posts;
+    ALTER TABLE posts_new RENAME TO posts;
+    CREATE INDEX posts_saved_at ON posts (saved_at, id);
+    CREATE INDEX posts_folder ON posts (folder_id);",
 ];
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -169,7 +191,7 @@ mod tests {
             .unwrap();
         assert_eq!(version as usize, MIGRATIONS.len() + 1);
         conn.execute("UPDATE media SET duration = 1.5", []).unwrap();
-        conn.execute("UPDATE posts SET source = 'pixiv'", [])
+        conn.execute("UPDATE posts SET source = 'reddit'", [])
             .unwrap();
         let kept: (i64, i64, String) = conn
             .query_row(
@@ -178,7 +200,7 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!(kept, (1, 1, "pixiv".into()));
+        assert_eq!(kept, (1, 1, "reddit".into()));
         // Foreign keys are back on: deleting the post still cascades.
         conn.execute("DELETE FROM posts WHERE id = 7", []).unwrap();
         let media: i64 = conn

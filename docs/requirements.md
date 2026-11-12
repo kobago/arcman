@@ -1,6 +1,6 @@
 # arcman 要件定義書（MVP）
 
-arcman（Archive Manager）は、Webの投稿をブックマークし、消えても読めるようにアーカイブするセルフホストのWebアプリ。MVPは x.com の投稿だけを対象とする。
+arcman（Archive Manager）は、Webの投稿をブックマークし、消えても読めるようにアーカイブするセルフホストのWebアプリ。MVPは x.com の投稿、pixiv の作品、YouTube の動画、imgur の投稿、Reddit の投稿、一般の Web ページを対象とする。
 
 - 作成日: 2026-10-21
 - 出典: チャットでの合意事項と、ヒアリングシート（https://claude.ai/artifact/4Hgf5Zf9LJvMnn3Vzqpevy）の回答
@@ -12,7 +12,7 @@ arcman（Archive Manager）は、Webの投稿をブックマークし、消え�
 |---|---|
 | 利用者 | 自分ひとり。外部への公開機能はない |
 | 端末 | PCとスマホの両方。レスポンシブ対応 |
-| 対象 | x.com の投稿、pixiv の作品、YouTube の動画、一般の Web ページ（ブックマーク）。Instagram はMVPの後で検討 |
+| 対象 | x.com の投稿、pixiv の作品、YouTube の動画、imgur の投稿、Reddit の投稿、一般の Web ページ（ブックマーク）。Instagram はMVPの後で検討 |
 | 取得元 | fxtwitter API（`GET {base}/2/status/{id}`）。ベースURLは設定で変えられ、自前ホストの FxEmbed に切り替えられる |
 | 技術 | バックエンドは Rust と axum、フロントエンドは TypeScript と React の SPA |
 | 動かし方 | ビルドした実行ファイルを CLI から起動する。設定とデータは `~/.arcman/` に置く（APP-08） |
@@ -33,6 +33,8 @@ arcman（Archive Manager）は、Webの投稿をブックマークし、消え�
 - 受け付ける URL: `x.com`、`twitter.com`、`mobile.twitter.com`、`fixupx.com`、`fxtwitter.com`、`vxtwitter.com` の投稿URL。クエリは無視する（CAP-01）
 - YouTube の動画URLも受け付ける: `youtube.com`（`www.`、`m.`、`music.` を含む）の `/watch?v=`、`/shorts/`、`/live/`、`/embed/`、`/v/`、`youtu.be/`、`youtube-nocookie.com/embed/`
 - pixiv の作品URLも受け付ける: `pixiv.net`・`phixiv.net` の `/artworks/{id}`、`/i/{id}`、`/member_illust.php?illust_id={id}`。R-18 の作品は、設定画面で pixiv のセッション（PHPSESSID）を保存しておくと保存できる。セッションはサーバーのデータベースに保存し、画面には表示しない
+- imgur のURLも受け付ける: `imgur.com` の `/gallery/{id}`（スラッグ付きも可）、`/a/{id}`、`/{id}` と、`i.imgur.com` の直リンク
+- Reddit の投稿URLも受け付ける: `reddit.com`・`old.reddit.com` の `/r/{subreddit}/comments/{id}`、`/comments/{id}`、`/gallery/{id}`、`user/{user}/comments/{id}`、`redd.it/{id}` と、`i.redd.it`・`v.redd.it` の直リンク
 - それ以外の `http`・`https` の URL は Web ページのブックマークとして保存する。フラグメントと計測用のクエリ（`utm_*`、`fbclid`、`gclid` など）は取り除き、同じ URL なら重複として扱う
 - Web ページが `404`・`410` を返したら保存しない。それ以外で取得できなかったとき（ボット対策の `403` や通信エラー）は失敗として保存し、再試行できる
 - 保存先は、今開いているフォルダ。「すべて」を開いているときは未分類。タグは後で詳細画面から付ける（CAP-03）
@@ -59,6 +61,8 @@ arcman（Archive Manager）は、Webの投稿をブックマークし、消え�
 - スレッドは保存しない
 - pixiv の作品は、タイトル、キャプション、作者、投稿日時、タグ、全ページの原寸画像、作者のアイコンを保存する。作品のタグは arcman のタグとして投稿に付ける（後から外せる）
 - YouTube の動画は、oEmbed で取れるタイトル、チャンネル名、チャンネルURLと、サムネイル（あれば最大サイズ）だけを保存する。動画ファイルは保存しない
+- imgur の投稿は、タイトル、説明文、投稿者、投稿日時と、アルバムの全画像・動画（GIF は音なしの mp4）を保存する。投稿者のアイコンも保存する
+- Reddit の投稿は、公開 RSS フィードからタイトル、本文、投稿者、サブレディット、投稿日時と、単体画像・ホスト動画（音声なしの mp4）を保存する。NSFW の投稿もこの経路で保存できる。設定画面で Reddit のセッション（reddit_session）を保存すると、ログインした状態の `.json` からギャラリーの全画像とスコア・コメント数も保存できる。セッションはサーバーのデータベースに保存し、画面には表示しない
 - Web ページは、OGP と HTML のメタデータ（タイトル、説明文、サイト名、言語）と、OGP 画像とサイトのアイコンを保存する。ページ本文は保存しない。画像やアイコンが取れなくてもブックマークは保存する
 - いいね数などは保存した時点のスナップショット。再取得の機能は作らない
 
@@ -74,6 +78,7 @@ arcman（Archive Manager）は、Webの投稿をブックマークし、消え�
 - 画像がない投稿は、本文の冒頭数行と投稿者名をタイルに表示する（GAL-06）
 - YouTube の動画はサムネイルとタイトルのタイル1枚にする。ショートは縦長にする
 - Web ページは OGP 画像とタイトルのタイル1枚にする。画像がなければタイトル、説明文、サイト名のタイルにする
+- imgur と Reddit の投稿は、保存した画像・動画ごとのタイルにする。画像・動画がない投稿は本文のタイルにする
 - 画像はなくリンクカードの画像だけがある投稿も、本文のタイルにする（GAL-07）
 - センシティブな投稿の画像もそのまま表示する（GAL-08）
 - 複数のタイルを選んでまとめて操作する機能は作らない（GAL-09）
@@ -87,6 +92,7 @@ arcman（Archive Manager）は、Webの投稿をブックマークし、消え�
 - 動画は詳細画面を開いたら音ありで再生する（DET-04）
 - YouTube の動画は埋め込みプレーヤー（youtube-nocookie.com）で再生し、タイトル、チャンネル、YouTube で開くリンクを表示する
 - Web ページは OGP 画像を大きく表示し、サイト名、アイコン、タイトル、説明文、ページを開くリンクを表示する
+- imgur と Reddit の投稿は x.com の投稿と同じ形で表示する（本文はタイトルと説明文・本文、統計は imgur がいいね・閲覧・コメント、Reddit がスコア・コメント）
 - 表示する項目: 本文、投稿者（名前、ID、アイコン）、投稿日時、保存日時、いいね・リポスト・表示回数などの数値、引用元の投稿、リンクカード、投票、コミュニティノート、x.com で開くリンク（DET-05）
 - 引用元の投稿は詳細画面にだけ表示する
 - 画像や動画のファイルを手元に保存するボタンを置く（DET-06）
@@ -128,7 +134,7 @@ arcman（Archive Manager）は、Webの投稿をブックマークし、消え�
 - キーワードとは別にタグを選んで絞り込める。複数選ぶと AND（SRC-03）
 - 保存日時を期間で絞り込む。開始日と終了日を入力する（SRC-04）
 - 並び順は保存日時の昇順と降順を切り替えられる
-- メディアの種類（画像、動画、pixiv、YouTube、Webページ、テキストのみ）と投稿者でも絞り込める（SRC-06）。Web ページの投稿者はドメイン。画像、動画、テキストのみは x.com の投稿と pixiv の作品が対象
+- メディアの種類（画像、動画、pixiv、YouTube、Webページ、imgur、Reddit、テキストのみ）と投稿者でも絞り込める（SRC-06）。Web ページの投稿者はドメイン、imgur はアカウント、Reddit はユーザー。画像、動画、テキストのみは x.com の投稿、pixiv の作品、imgur と Reddit の投稿が対象
 - 絞り込みの条件は URL に反映し、再読み込みやブックマークでも残る（SRC-05）
 
 ### 2.9 設定と表示
@@ -142,9 +148,10 @@ arcman（Archive Manager）は、Webの投稿をブックマークし、消え�
 
 ## 3. MVP の対象外
 
-- Web ページの本文の保存（魚拓）、x.com、pixiv、YouTube 以外のサイト専用の取り込み
+- Web ページの本文の保存（魚拓）、x.com、pixiv、YouTube、imgur、Reddit 以外のサイト専用の取り込み
 - pixiv の小説、うごイラの動画化
 - YouTube の動画ファイルのダウンロード
+- Reddit のホスト動画の音声トラックの結合（ffmpeg を使わないため、音声なしの mp4 を保存する）
 - URL 入力以外の保存の入口（共有メニュー、ブラウザ拡張、一括インポート、自動取り込み）
 - スレッドの保存、数値の再取得
 - メモ機能、タグの階層、タグの統合、複数選択での一括操作

@@ -29,6 +29,8 @@
 | `fxtwitter.rs` | URL から投稿IDを取り出す、API 呼び出し、レスポンスの型 |
 | `youtube.rs` | URL から動画IDを取り出す、oEmbed の呼び出し、サムネイルのダウンロード計画 |
 | `pixiv.rs` | URL から作品IDを取り出す、ajax API の呼び出し、全ページとアイコンのダウンロード計画 |
+| `imgur.rs` | URL から投稿IDを取り出す、ページ内の `window.postDataJSON` または OGP の読み取り、全画像・動画とアイコンのダウンロード計画 |
+| `reddit.rs` | URL から投稿IDを取り出す、公開 Atom フィードの読み取り、セッションがあるときは `.json` の呼び出し、ギャラリー・DASH 動画・画像のダウンロード計画 |
 | `web.rs` | URL の正規化、ページの取得とメタデータの読み取り（scraper、文字コードは encoding_rs）、画像とアイコンのダウンロード計画 |
 | `archive.rs` | メディアのダウンロード計画と、1件ずつ処理するワーカー |
 | `posts.rs` | 投稿の保存、タイル、詳細、削除、再試行、フォルダの移動、タグの付け替え |
@@ -45,6 +47,8 @@
 | `ARCMAN_FXTWITTER_BASE_URL` | `https://api.fxtwitter.com` | 設定画面の初期値。画面で保存した値が優先 |
 | `ARCMAN_YOUTUBE_OEMBED_URL` | `https://www.youtube.com/oembed` | テスト用。設定画面には出さない |
 | `ARCMAN_PIXIV_BASE_URL` | `https://www.pixiv.net` | テスト用。設定画面には出さない |
+| `ARCMAN_IMGUR_BASE_URL` | `https://imgur.com` | テスト用。設定画面には出さない |
+| `ARCMAN_REDDIT_BASE_URL` | `https://www.reddit.com` | テスト用。設定画面には出さない |
 
 ```
 arcman serve [--addr HOST:PORT]   サーバーを起動する（例: Tailscale 越しなら --addr 0.0.0.0:3000）
@@ -93,7 +97,7 @@ arcman set-password               パスワードを設定する（端末なら2
 | `q` | 本文とタグ名の部分一致 |
 | `tags` | タグ ID のカンマ区切り（AND） |
 | `from`、`to` | 保存日時の範囲（ISO 8601。`to` は含まない） |
-| `media` | `photo`、`video`（GIF を含む）、`text`（ここまでは x.com の投稿と pixiv の作品だけ）、`pixiv`、`youtube`、`web` |
+| `media` | `photo`、`video`（GIF を含む）、`text`（ここまでは x.com、pixiv、imgur、Reddit の投稿）、`pixiv`、`youtube`、`web`、`imgur`、`reddit` |
 | `author` | 投稿者のスクリーンネーム |
 | `order` | `desc`（既定）、`asc` |
 
@@ -129,6 +133,7 @@ arcman set-password               パスワードを設定する（端末なら2
 | GET | `/api/settings` | 値と、その出どころ（`saved`、`env`、`default`）。pixiv のセッションは保存済みかどうか（`{saved}`）だけを返す |
 | PUT | `/api/settings` | `{fxtwitter_base_url}` |
 | PUT | `/api/settings/pixiv-session` | `{session}`。`PHPSESSID=` 付きでも値だけでもよい。空なら削除 |
+| PUT | `/api/settings/reddit-session` | `{session}`。`reddit_session=` 付きでも値だけでもよい。空なら削除 |
 
 ## 4. 保存の流れ
 
@@ -153,6 +158,21 @@ pixiv の作品は、2 の代わりに `GET https://www.pixiv.net/ajax/illust/{i
 - 作品のタグは、スナップショットを保存するときに arcman のタグとして投稿に付ける（同じタグキーのタグがあればそれを使う）
 - ワーカーは全ページの原寸画像と作者のアイコンを保存する。`i.pximg.net` は `Referer: https://www.pixiv.net/` がないと `403` を返すので付ける。うごイラは1コマ目の画像だけ
 
+imgur の投稿は、2 の代わりにページを `GET` する。ギャラリーとアルバムのページには `window.postDataJSON` に投稿の JSON が埋め込まれているので、そこからメディア一覧を読む。単体の画像・動画のページは OGP の `og:video`・`og:image` を読む。`i.imgur.com` の直リンクはページを取得せず、拡張子から画像・動画・GIF を決める。
+
+- `404`・`410` は `not_found`、`401`・`403` は `private` として保存しない。ページが返っても投稿のデータがないときも `not_found`
+- `media` の各要素の `url`、`width`、`height`、`metadata.duration` を保存する。`type` が `video` のものは mp4 を保存し、`metadata.is_animated` かつ音声なしなら GIF として扱う
+- 動画のサムネイルは `{id}h.jpg` を使う
+- スナップショットには読み取った項目（ID、タイトル、説明文、アカウント名とアイコン、投稿日時、閲覧数、いいね数、コメント数、メディア一覧）を保存する
+
+Reddit の投稿は、Reddit が公開している Atom フィード `GET {base}/comments/{id}.rss` を読む。2026年に未ログインの `.json` が 403 で拒否されるようになったため、RSS を既定の経路にしている。設定画面で Reddit のセッション（`reddit_session`）を保存しているときは、先に `GET {base}/comments/{id}.json?raw_json=1&limit=1` を `Cookie: reddit_session=...; over18=1` 付きで呼び、ギャラリーや動画を含む完全な投稿を読む。`.json` が拒否されたら RSS に戻る。`i.redd.it`・`v.redd.it` などの直リンクはページを取得せず、拡張子から画像・動画を決める。
+
+- RSS の `404` は `not_found`、`401`・`403` は `private` として保存しない。`429` は API に接続できない失敗として保存し、再試行できる
+- RSS の最初のエントリ（`t3_`）から、ID、タイトル、本文、投稿者、サブレディット、投稿日時を読む。`[link]` が `i.redd.it` の画像なら保存し、`v.redd.it` の動画なら `DASHPlaylist.mpd` から最高画質の mp4 を選ぶ。ギャラリーは RSS に先頭画像のプレビューしかないため、セッションがないときはその1枚を保存する
+- 本文中の画像（`div.md` の中の `i.redd.it`・`preview.redd.it` のリンクや `img`）も保存する。プレビューの URL は `width=1080` に直して保存する
+- ホスト動画の音声は別トラックなので結合しない（音声なしの mp4 になる）
+- スナップショットには RSS または JSON から読み取った項目（タイトル、本文、投稿者、サブレディット、パーマリンク、投稿日時、スコア、コメント数、メディア一覧）を保存する
+
 Web ページは、2 の代わりにページを `GET` する（20秒で打ち切り、HTML は先頭 1MB まで読む）。
 
 - `404` と `410` は `not_found` として保存しない。ほかの失敗は `page_unavailable` の失敗として保存する
@@ -167,7 +187,7 @@ Web ページは、2 の代わりにページを `GET` する（20秒で打ち�
 
 ## 5. 詳細のレスポンス
 
-スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。YouTube の動画は `status` の代わりに `video`（ID、URL、ショートか、タイトル、チャンネル、サムネイル）を、Web ページは `page`（URL、タイトル、説明文、サイト名、ドメイン、画像、アイコン）を返す。pixiv の作品は x.com の投稿と同じ `status` の形で返す（本文はタイトルとキャプション、統計はいいね・ブックマーク・閲覧数）。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
+スナップショットを型に読み直し、リモートの URL を保存したファイルの URL（`/media/...`）に置き換えて返す。YouTube の動画は `status` の代わりに `video`（ID、URL、ショートか、タイトル、チャンネル、サムネイル）を、Web ページは `page`（URL、タイトル、説明文、サイト名、ドメイン、画像、アイコン）を返す。pixiv の作品、imgur と Reddit の投稿は x.com の投稿と同じ `status` の形で返す（本文はタイトルと説明文・本文、統計は pixiv がいいね・ブックマーク・閲覧数、imgur がいいね・閲覧数・コメント数、Reddit がスコア・コメント数）。X記事は本文のブロックをそのまま返し、画像の URL の置き換え表（`local_urls`）を添える。
 
 ## 6. SPA の配信
 

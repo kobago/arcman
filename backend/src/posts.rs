@@ -13,7 +13,7 @@ use crate::{
     AppState, asmr,
     error::{ApiError, ApiResult},
     fxtwitter::{self, Card, FetchError, Note, Status, Translation},
-    pixiv, settings, tags, web, youtube,
+    imgur, pixiv, reddit, settings, tags, web, youtube,
 };
 
 pub fn remove_media_dir(state: &AppState, post_id: i64) {
@@ -44,6 +44,10 @@ enum Target {
     Youtube(youtube::Video),
     /// An artwork, by its prefixed status id.
     Pixiv(String),
+    /// An imgur post, by its prefixed status id.
+    Imgur(String),
+    /// A reddit post, by its prefixed status id.
+    Reddit(String),
     /// Any other web page, by its normalized URL.
     Web(String),
 }
@@ -54,6 +58,8 @@ impl Target {
             .map(Self::X)
             .or_else(|| youtube::parse_video(url).map(Self::Youtube))
             .or_else(|| pixiv::parse_status_id(url).map(Self::Pixiv))
+            .or_else(|| imgur::parse_status_id(url).map(Self::Imgur))
+            .or_else(|| reddit::parse_status_id(url).map(Self::Reddit))
             .or_else(|| web::normalize(url).map(Self::Web))
     }
 
@@ -62,6 +68,8 @@ impl Target {
             Self::X(_) => "x",
             Self::Youtube(_) => "youtube",
             Self::Pixiv(_) => "pixiv",
+            Self::Imgur(_) => "imgur",
+            Self::Reddit(_) => "reddit",
             Self::Web(_) => "web",
         }
     }
@@ -70,7 +78,7 @@ impl Target {
         match self {
             Self::X(id) => id,
             Self::Youtube(v) => &v.id,
-            Self::Pixiv(id) | Self::Web(id) => id,
+            Self::Pixiv(id) | Self::Imgur(id) | Self::Reddit(id) | Self::Web(id) => id,
         }
     }
 }
@@ -99,6 +107,7 @@ async fn fetch_snapshot(
     state: &AppState,
     source: &str,
     status_id: &str,
+    source_url: &str,
 ) -> Result<Snapshot, FetchError> {
     if source == "web"
         && let Some(id) = asmr::parse_work_id(status_id)
@@ -157,6 +166,46 @@ async fn fetch_snapshot(
             lang: None,
             posted_at: illust.created_at,
             tags: illust.tags,
+        });
+    }
+    if source == "imgur" {
+        let (raw, post) =
+            imgur::fetch(&state.http, &state.imgur_base_url, source_url, status_id).await?;
+        let account = post.account.clone().unwrap_or_default();
+        return Ok(Snapshot {
+            raw,
+            author_screen_name: account.clone(),
+            author_name: account,
+            text: post.text(),
+            lang: None,
+            posted_at: post.created_at,
+            tags: vec![],
+        });
+    }
+    if source == "reddit" {
+        let session =
+            settings::reddit_session(state).map_err(|e| FetchError::Transport(e.to_string()))?;
+        let (raw, post) = reddit::fetch(
+            &state.http,
+            &state.reddit_base_url,
+            source_url,
+            status_id,
+            session.as_deref(),
+        )
+        .await?;
+        let author = post.author.clone();
+        return Ok(Snapshot {
+            raw,
+            author_screen_name: author.clone(),
+            author_name: if author.is_empty() {
+                post.subreddit.clone()
+            } else {
+                format!("u/{author}")
+            },
+            text: post.text(),
+            lang: None,
+            posted_at: post.created_at(),
+            tags: vec![],
         });
     }
     let base =
@@ -249,7 +298,7 @@ pub async fn create(
             results.push(result("duplicate", Some(id), None));
             continue;
         }
-        let fetched = fetch_snapshot(&state, target.source(), status_id).await;
+        let fetched = fetch_snapshot(&state, target.source(), status_id, url).await;
         if let Err(FetchError::Unavailable(reason)) = fetched {
             results.push(result("unavailable", None, Some(reason)));
             continue;
@@ -291,12 +340,17 @@ pub async fn create(
 }
 
 pub async fn retry(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
-    let (source, status_id, post_state, has_snapshot): (String, String, String, bool) =
-        state.db().query_row(
-            "SELECT source, status_id, state, snapshot IS NOT NULL FROM posts WHERE id = ?1",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )?;
+    let (source, status_id, source_url, post_state, has_snapshot): (
+        String,
+        String,
+        String,
+        String,
+        bool,
+    ) = state.db().query_row(
+        "SELECT source, status_id, source_url, state, snapshot IS NOT NULL FROM posts WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )?;
     if post_state != "failed" {
         return Err(ApiError::Conflict("not_failed"));
     }
@@ -306,7 +360,7 @@ pub async fn retry(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRes
             [id],
         )?;
     } else {
-        match fetch_snapshot(&state, &source, &status_id).await {
+        match fetch_snapshot(&state, &source, &status_id, &source_url).await {
             Ok(snapshot) => store_snapshot(&state.db(), id, &snapshot)?,
             Err(FetchError::Unavailable(reason)) => return Err(ApiError::Unprocessable(reason)),
             Err(FetchError::Transport(e)) => {
@@ -422,18 +476,18 @@ pub async fn tiles(
         }
     }
     let media_kinds: Option<&[&str]> = match q.media.as_deref() {
-        None | Some("youtube" | "web" | "pixiv") => None,
+        None | Some("youtube" | "web" | "pixiv" | "imgur" | "reddit") => None,
         Some("photo") => Some(&["photo"]),
         Some("video") => Some(&["video", "gif"]),
         Some("text") => Some(&[]),
         Some(_) => return Err(ApiError::BadRequest("invalid_media")),
     };
-    // The other media types are about X posts and pixiv artworks; each site is also a type of its own.
-    if let Some(source @ ("youtube" | "web" | "pixiv")) = q.media.as_deref() {
+    // Each site is also a type of its own; the media kinds cover the sites that store media.
+    if let Some(source @ ("youtube" | "web" | "pixiv" | "imgur" | "reddit")) = q.media.as_deref() {
         wh.push("p.source = ? AND p.state = 'done'".into());
         args.push(source.to_string().into());
     } else if media_kinds.is_some() {
-        wh.push("p.source IN ('x', 'pixiv')".into());
+        wh.push("p.source IN ('x', 'pixiv', 'imgur', 'reddit')".into());
     }
     match media_kinds {
         Some([]) => wh.push(format!("p.state = 'done' AND NOT EXISTS ({MAIN_MEDIA_OF})")),
@@ -963,6 +1017,74 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<i64>) -> ApiRe
                     site_name: p.site_name,
                     image: local.by_role("main").into_iter().next(),
                     icon: local.first("avatar"),
+                });
+        }
+        "imgur" => {
+            let url = detail.url.clone();
+            detail.status = snapshot
+                .and_then(|s| serde_json::from_str::<imgur::Post>(&s).ok())
+                .map(|p| {
+                    let account = p.account.clone().unwrap_or_default();
+                    StatusView {
+                        url: url.clone(),
+                        text: p.text(),
+                        lang: None,
+                        posted_at: p.created_at,
+                        author: AuthorView {
+                            name: account.clone(),
+                            screen_name: account,
+                            avatar: local.first("avatar"),
+                        },
+                        stats: Stats {
+                            likes: p.upvotes,
+                            reposts: None,
+                            quotes: None,
+                            replies: p.comments,
+                            views: p.views,
+                            bookmarks: None,
+                        },
+                        media: local.by_role("main"),
+                        translation: None,
+                        quote: None,
+                        card: None,
+                        poll: None,
+                        community_note: None,
+                        article: None,
+                    }
+                });
+        }
+        "reddit" => {
+            detail.status = snapshot
+                .and_then(|s| serde_json::from_str::<reddit::Post>(&s).ok())
+                .map(|p| StatusView {
+                    url: p.permalink_url(),
+                    text: p.text(),
+                    lang: None,
+                    posted_at: p.created_at(),
+                    author: AuthorView {
+                        name: if p.author.is_empty() {
+                            p.subreddit.clone()
+                        } else {
+                            format!("u/{}", p.author)
+                        },
+                        screen_name: p.author.clone(),
+                        avatar: None,
+                    },
+                    stats: Stats {
+                        likes: p.score.filter(|v| *v >= 0).map(|v| v as u64),
+                        reposts: None,
+                        quotes: None,
+                        replies: p.num_comments.filter(|v| *v >= 0).map(|v| v as u64),
+                        views: None,
+                        bookmarks: None,
+                    },
+                    media: local.by_role("main"),
+                    translation: None,
+                    quote: None,
+                    card: None,
+                    poll: None,
+                    community_note: None,
+                    article: None,
                 });
         }
         _ => {

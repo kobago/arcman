@@ -68,7 +68,7 @@ export type PageView = {
 
 export type PostDetail = {
   id: number
-  source: 'x' | 'youtube' | 'web' | 'pixiv'
+  source: 'x' | 'youtube' | 'web' | 'pixiv' | 'imgur' | 'reddit'
   status_id: string
   url: string
   state: 'pending' | 'done' | 'failed'
@@ -99,6 +99,7 @@ export type PostProgress = { post_id: number; state: 'pending' | 'done' | 'faile
 export type Settings = {
   fxtwitter_base_url: { value: string; source: 'saved' | 'env' | 'default' }
   pixiv_session: { saved: boolean }
+  reddit_session: { saved: boolean }
 }
 
 export class ApiError extends Error {
@@ -170,4 +171,5 @@ export const api = {
   saveSettings: (fxtwitterBaseUrl: string) =>
     request<void>('PUT', '/api/settings', { fxtwitter_base_url: fxtwitterBaseUrl }),
   savePixivSession: (session: string) => request<void>('PUT', '/api/settings/pixiv-session', { session }),
+  saveRedditSession: (session: string) => request<void>('PUT', '/api/settings/reddit-session', { session }),
 }

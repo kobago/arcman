@@ -20,6 +20,13 @@ use tower::ServiceExt;
 
 const PASSWORD: &str = "correct horse battery";
 
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 #[derive(Default)]
 struct Upstream {
     statuses: HashMap<String, (u16, Value)>,
@@ -31,6 +38,12 @@ struct Upstream {
     illust_pages: HashMap<String, Value>,
     /// ASMR Online works by id.
     works: HashMap<String, Value>,
+    /// Imgur pages by id: status and the HTML (including the post JSON).
+    imgur_pages: HashMap<String, (u16, String)>,
+    /// Reddit posts by id: status and the JSON listing.
+    reddit_posts: HashMap<String, (u16, Value)>,
+    /// Reddit post feeds by id: status and the Atom XML.
+    reddit_rss: HashMap<String, (u16, String)>,
     /// R-18 artworks: their image URLs are only given to the signed-in session.
     r18: HashSet<String>,
     missing_files: HashSet<String>,
@@ -139,6 +152,48 @@ async fn fake_work(State(fake): State<Fake>, Path(id): Path<String>) -> impl Int
     }
 }
 
+async fn fake_imgur_page(State(fake): State<Fake>, Path(id): Path<String>) -> impl IntoResponse {
+    match fake.lock().unwrap().imgur_pages.get(&id).cloned() {
+        Some((code, html)) => (
+            StatusCode::from_u16(code).unwrap(),
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            html,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn fake_reddit_post(
+    State(fake): State<Fake>,
+    Path(file): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(id) = file.strip_suffix(".rss") {
+        return match fake.lock().unwrap().reddit_rss.get(id).cloned() {
+            Some((code, xml)) => (
+                StatusCode::from_u16(code).unwrap(),
+                [(header::CONTENT_TYPE, "application/atom+xml; charset=utf-8")],
+                xml,
+            )
+                .into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
+    let id = file.strip_suffix(".json").unwrap_or(&file);
+    let cookies = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    match fake.lock().unwrap().reddit_posts.get(id).cloned() {
+        Some((200, _)) if !cookies.contains("reddit_session=test-session") => {
+            StatusCode::FORBIDDEN.into_response()
+        }
+        Some((code, body)) => (StatusCode::from_u16(code).unwrap(), Json(body)).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": 404}))).into_response(),
+    }
+}
+
 async fn spawn_upstream() -> (String, Fake) {
     let fake = Fake::default();
     let router = Router::new()
@@ -151,6 +206,10 @@ async fn spawn_upstream() -> (String, Fake) {
         .route("/ajax/illust/{id}", get(fake_illust))
         .route("/ajax/illust/{id}/pages", get(fake_illust_pages))
         .route("/api/workInfo/{id}", get(fake_work))
+        .route("/gallery/{id}", get(fake_imgur_page))
+        .route("/a/{id}", get(fake_imgur_page))
+        .route("/{id}", get(fake_imgur_page))
+        .route("/comments/{file}", get(fake_reddit_post))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -185,6 +244,8 @@ impl TestApp {
             youtube_oembed_url: Some(format!("{base}/oembed")),
             pixiv_base_url: Some(base.clone()),
             asmr_base_url: Some(base.clone()),
+            imgur_base_url: Some(base.clone()),
+            reddit_base_url: Some(base.clone()),
         })
         .unwrap();
         arcman::auth::set_password(&state.db(), PASSWORD).unwrap();
@@ -279,6 +340,42 @@ impl TestApp {
             (code, "text/html; charset=utf-8", html.to_string()),
         );
         format!("{}/pages/{name}", self.base)
+    }
+
+    /// An imgur post page with the JSON imgur embeds for its gallery.
+    fn imgur(&self, id: &str, post: Value) {
+        let json = post.to_string();
+        let literal = serde_json::to_string(&json).unwrap();
+        let html = format!(
+            "<!doctype html><html><head><script>window.postDataJSON={literal};</script></head></html>"
+        );
+        self.fake
+            .lock()
+            .unwrap()
+            .imgur_pages
+            .insert(id.to_string(), (200, html));
+    }
+
+    /// A reddit post as the first listing of `/comments/{id}.json`.
+    fn reddit(&self, id: &str, post: Value) {
+        let body = json!([
+            {"kind": "Listing", "data": {"children": [{"kind": "t3", "data": post}]}},
+            {"kind": "Listing", "data": {"children": []}}
+        ]);
+        self.fake
+            .lock()
+            .unwrap()
+            .reddit_posts
+            .insert(id.to_string(), (200, body));
+    }
+
+    /// The public Atom feed of a reddit post.
+    fn reddit_rss(&self, id: &str, code: u16, xml: &str) {
+        self.fake
+            .lock()
+            .unwrap()
+            .reddit_rss
+            .insert(id.to_string(), (code, xml.to_string()));
     }
 
     /// An artwork with `pages` original images and the given pixiv tags.
@@ -1705,6 +1802,263 @@ async fn an_asmr_online_work_is_bookmarked_from_its_api_with_its_cover_and_tags(
 }
 
 #[tokio::test]
+async fn an_imgur_album_is_saved_with_every_image_video_and_its_uploader() {
+    let app = TestApp::start().await;
+    let image = format!("{}/files/imgur-0.jpeg", app.base);
+    let video = format!("{}/files/imgur-1.mp4", app.base);
+    let avatar = format!("{}/images/imgur-avatar.png", app.base);
+    app.imgur(
+        "Pcc90bT",
+        json!({
+            "id": "Pcc90bT",
+            "title": "an album",
+            "description": "two files",
+            "created_at": "2025-08-15T05:03:21Z",
+            "view_count": 10,
+            "upvote_count": 3,
+            "comment_count": 2,
+            "account": {"username": "echo7tango", "avatar_url": avatar},
+            "media": [
+                {"id": "one", "type": "image", "mime_type": "image/jpeg", "url": image,
+                 "width": 2048, "height": 1536, "metadata": {}},
+                {"id": "two", "type": "video", "mime_type": "video/mp4", "url": video,
+                 "width": 1280, "height": 720,
+                 "metadata": {"is_animated": true, "has_sound": false, "duration": 4.5}}
+            ]
+        }),
+    );
+    let id = app
+        .save(
+            "https://imgur.com/gallery/nitto-ridge-grapplers-245-65-17-dirtcom-trailswing-Pcc90bT",
+            None,
+        )
+        .await;
+
+    let tiles = app.tiles("media=imgur").await["tiles"].clone();
+    let tiles = tiles.as_array().unwrap();
+    assert_eq!(tiles.len(), 2);
+    assert_eq!(tiles[0]["kind"], "photo");
+    assert_eq!(tiles[1]["kind"], "gif");
+    assert_eq!(tiles[1]["duration"], 4.5);
+    assert_eq!(
+        app.call("GET", tiles[1]["src"].as_str().unwrap(), None)
+            .await
+            .1,
+        "FILE:imgur-1.mp4"
+    );
+    assert_eq!(app.tile_post_ids("media=video").await, vec![id]);
+    assert_eq!(app.tile_post_ids("media=photo").await, vec![id]);
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["source"], "imgur");
+    assert_eq!(d["status_id"], "imgur:Pcc90bT");
+    assert_eq!(d["status"]["text"], "an album\ntwo files");
+    assert_eq!(d["status"]["author"]["name"], "echo7tango");
+    assert_eq!(
+        (
+            d["status"]["stats"]["likes"].clone(),
+            d["status"]["stats"]["views"].clone()
+        ),
+        (json!(3), json!(10))
+    );
+    assert_eq!(
+        app.call(
+            "GET",
+            d["status"]["author"]["avatar"].as_str().unwrap(),
+            None
+        )
+        .await
+        .1,
+        "IMG:imgur-avatar.png"
+    );
+    assert_eq!(
+        app.call(
+            "GET",
+            d["status"]["media"][1]["thumbnail"].as_str().unwrap(),
+            None
+        )
+        .await
+        .1,
+        "FILE:imgur-1h.jpg"
+    );
+
+    app.fake
+        .lock()
+        .unwrap()
+        .imgur_pages
+        .insert("missing".into(), (404, String::new()));
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://imgur.com/gallery/missing"] })),
+        )
+        .await;
+    assert_eq!(v[0]["outcome"], "unavailable", "{v}");
+    assert_eq!(v[0]["reason"], "not_found");
+}
+
+#[tokio::test]
+async fn a_reddit_gallery_is_saved_with_its_media_and_post_information() {
+    let app = TestApp::start().await;
+    let image = format!("{}/files/reddit-0.png", app.base);
+    let animation = format!("{}/files/reddit-1.mp4", app.base);
+    let preview = format!("{}/files/reddit-preview.jpg", app.base);
+    app.reddit(
+        "abc123",
+        json!({
+            "id": "abc123",
+            "title": "cats",
+            "selftext": "two pictures",
+            "subreddit": "pics",
+            "author": "alice",
+            "permalink": "/r/pics/comments/abc123/cats/",
+            "url": "https://www.reddit.com/gallery/abc123",
+            "created_utc": 1_700_000_000.0,
+            "score": 42,
+            "num_comments": 7,
+            "is_gallery": true,
+            "gallery_data": {"items": [{"media_id": "one"}, {"media_id": "two"}]},
+            "media_metadata": {
+                "one": {"status": "valid", "e": "Image",
+                        "s": {"u": image, "x": 800, "y": 600}},
+                "two": {"status": "valid", "e": "AnimatedImage",
+                        "s": {"u": format!("{}/files/reddit-1.gif", app.base), "mp4": animation, "x": 400, "y": 300}}
+            },
+            "preview": {"images": [{"source": {"url": preview, "width": 1080, "height": 1920}}]}
+        }),
+    );
+    let (s, _) = app
+        .call(
+            "PUT",
+            "/api/settings/reddit-session",
+            Some(json!({ "session": "bad value" })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = app
+        .call(
+            "PUT",
+            "/api/settings/reddit-session",
+            Some(json!({ "session": " test-session " })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, settings) = app.call("GET", "/api/settings", None).await;
+    assert_eq!(settings["reddit_session"], json!({ "saved": true }));
+    assert!(!settings.to_string().contains("test-session"), "{settings}");
+
+    let id = app
+        .save("https://www.reddit.com/r/pics/comments/abc123/cats/", None)
+        .await;
+
+    let tiles = app.tiles("media=reddit").await["tiles"].clone();
+    let tiles = tiles.as_array().unwrap();
+    assert_eq!(tiles.len(), 2);
+    assert_eq!(tiles[0]["kind"], "photo");
+    assert_eq!(tiles[1]["kind"], "gif");
+    assert_eq!(
+        app.call("GET", tiles[1]["src"].as_str().unwrap(), None)
+            .await
+            .1,
+        "FILE:reddit-1.mp4"
+    );
+    assert_eq!(app.tile_post_ids("media=photo").await, vec![id]);
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["source"], "reddit");
+    assert_eq!(d["status_id"], "reddit:abc123");
+    assert_eq!(
+        d["status"]["url"],
+        "https://www.reddit.com/r/pics/comments/abc123/cats/"
+    );
+    assert_eq!(d["status"]["text"], "cats\ntwo pictures");
+    assert_eq!(d["status"]["posted_at"], 1_700_000_000);
+    assert_eq!(d["status"]["author"]["name"], "u/alice");
+    assert_eq!(d["status"]["author"]["screen_name"], "alice");
+    assert_eq!(
+        (
+            d["status"]["stats"]["likes"].clone(),
+            d["status"]["stats"]["replies"].clone()
+        ),
+        (json!(42), json!(7))
+    );
+    assert_eq!(d["status"]["media"].as_array().unwrap().len(), 2);
+
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({ "urls": ["https://redd.it/abc123"] })),
+        )
+        .await;
+    assert_eq!(v[0]["outcome"], "duplicate", "{v}");
+    assert_eq!(v[0]["post_id"], id);
+}
+
+#[tokio::test]
+async fn missing_imgur_and_reddit_posts_are_rejected_without_being_saved() {
+    let app = TestApp::start().await;
+    app.reddit_rss("secret", 403, "");
+    let (_, v) = app
+        .call(
+            "POST",
+            "/api/posts",
+            Some(json!({
+                "urls": [
+                    "https://imgur.com/gallery/missing",
+                    "https://www.reddit.com/r/pics/comments/missing/",
+                    "https://www.reddit.com/r/private/comments/secret/"
+                ]
+            })),
+        )
+        .await;
+    assert_eq!(v[0]["reason"], "not_found", "{v}");
+    assert_eq!(v[1]["reason"], "not_found", "{v}");
+    assert_eq!(v[2]["reason"], "private", "{v}");
+    assert!(app.tiles("").await["tiles"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_nsfw_reddit_post_is_saved_with_its_image_from_the_public_feed() {
+    let app = TestApp::start().await;
+    let image = format!("{}/images/nsfw.jpeg", app.base);
+    let preview = format!("{}/images/nsfw-preview.jpeg", app.base);
+    let content = format!(
+        r#"<table><tr><td><a href="https://www.reddit.com/r/celebnsfw/comments/1h74e1v/elizabeth_olsen/"><img src="{preview}" alt="Elizabeth Olsen" /></a></td><td> &#32; submitted by &#32; <a href="https://www.reddit.com/user/shdusns82"> /u/shdusns82 </a> <br/> <span><a href="{image}">[link]</a></span> &#32; <span><a href="https://www.reddit.com/r/celebnsfw/comments/1h74e1v/elizabeth_olsen/">[comments]</a></span> </td></tr></table>"#
+    );
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/"><entry><author><name>/u/shdusns82</name></author><category term="celebnsfw" label="r/celebnsfw"/><content type="html">{}</content><id>t3_1h74e1v</id><media:thumbnail url="{}" /><link href="https://www.reddit.com/r/celebnsfw/comments/1h74e1v/elizabeth_olsen/" /><updated>2024-12-05T08:13:22+00:00</updated><published>2024-12-05T08:13:22+00:00</published><title>Elizabeth Olsen</title></entry></feed>"#,
+        escape_xml(&content),
+        preview
+    );
+    app.reddit_rss("1h74e1v", 200, &xml);
+
+    let id = app
+        .save(
+            "https://www.reddit.com/r/celebnsfw/comments/1h74e1v/elizabeth_olsen/",
+            None,
+        )
+        .await;
+
+    let tile = app.tiles("media=reddit").await["tiles"][0].clone();
+    assert_eq!(tile["kind"], "photo");
+    assert_eq!(
+        app.call("GET", tile["src"].as_str().unwrap(), None).await.1,
+        "IMG:nsfw.jpeg"
+    );
+
+    let (_, d) = app.call("GET", &format!("/api/posts/{id}"), None).await;
+    assert_eq!(d["source"], "reddit");
+    assert_eq!(d["status_id"], "reddit:1h74e1v");
+    assert_eq!(d["status"]["text"], "Elizabeth Olsen");
+    assert_eq!(d["status"]["posted_at"], 1_733_386_402);
+    assert_eq!(d["status"]["author"]["name"], "u/shdusns82");
+    assert_eq!(d["status"]["author"]["screen_name"], "shdusns82");
+    assert_eq!(d["status"]["media"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn a_pixiv_artwork_does_not_collide_with_an_x_post_of_the_same_id() {
     let app = TestApp::start().await;
     app.illust("121", 1, &[]);
@@ -1832,6 +2186,8 @@ async fn live_pixiv_artwork_is_saved_with_its_image_and_tags() {
         youtube_oembed_url: None,
         pixiv_base_url: None,
         asmr_base_url: None,
+        imgur_base_url: None,
+        reddit_base_url: None,
     })
     .unwrap();
     arcman::auth::set_password(&state.db(), PASSWORD).unwrap();
